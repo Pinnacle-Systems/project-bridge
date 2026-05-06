@@ -5,22 +5,23 @@ import type {
   ProcedureParamMapping,
   ContractOperation
 } from "../contracts/index.js";
-import type { AuditEvent } from "../audit/index.js";
+import type { AuditLogger } from "../audit/index.js";
 import type { PermissionChecker, RequestIdentity } from "./permissions.js";
 import { transformWriteValue } from "../transformers/engine.js";
 import { translateOracleError } from "../errors/translator.js";
-
-// ─── Types ──────────────────────────────────────────────────────────────
-
-export type AuditLogger = {
-  log(event: Omit<AuditEvent, "id" | "occurredAt">): void;
-};
+import {
+  buildInOutBind,
+  buildOutBind,
+  buildProcedureName,
+  type OracleBindTypeRegistry
+} from "./oracle-helpers.js";
 
 export type WriteHandlerContext = {
   cache: ContractCache;
   adapter: OracleConnectorAdapter;
   permissions: PermissionChecker;
   audit?: AuditLogger;
+  oracleBindTypes: OracleBindTypeRegistry;
 };
 
 export type WriteHandlerInput = {
@@ -106,7 +107,7 @@ export function createWriteHandler(ctx: WriteHandlerContext) {
     for (const param of contract.procedureParams) {
       if (param.direction === "out" || param.direction === "return") {
         // 8. OUT params — set up as output bind placeholders
-        binds[param.paramName] = { dir: "out", type: param.oracleType };
+        binds[param.paramName] = buildOutBind(param.oracleType, ctx.oracleBindTypes);
         continue;
       }
 
@@ -121,7 +122,7 @@ export function createWriteHandler(ctx: WriteHandlerContext) {
             : rawValue;
 
           if (param.direction === "inout") {
-            binds[param.paramName] = { dir: "inout", val: transformed as any, type: param.oracleType };
+            binds[param.paramName] = buildInOutBind(transformed as BindValue, param.oracleType, ctx.oracleBindTypes);
           } else {
             binds[param.paramName] = transformed as BindValue;
           }
@@ -190,21 +191,4 @@ export function createWriteHandler(ctx: WriteHandlerContext) {
     const status = operation === "create" ? 201 : 200;
     return { status, body: { data: responseData } };
   };
-}
-
-// ─── Helpers ────────────────────────────────────────────────────────────
-
-/**
- * Build the fully qualified Oracle procedure call target.
- *
- * - Package: OWNER.PACKAGE_NAME.PROCEDURE_NAME
- * - Standalone procedure: OWNER.PROCEDURE_NAME (or OWNER.NAME)
- */
-function buildProcedureName(contract: ResolvedApiContract): string {
-  const { owner, type, packageName, procedureName, name } = contract.source;
-  if (type === "package") {
-    return `${owner}.${packageName}.${procedureName}`;
-  }
-  // standalone procedure
-  return `${owner}.${procedureName ?? name}`;
 }

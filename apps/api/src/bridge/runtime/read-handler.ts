@@ -1,15 +1,11 @@
 import type { ContractCache } from "../contracts/contract-cache.js";
 import type { OracleConnectorAdapter } from "../connections/oracle-adapter.js";
 import type { ApiFieldMapping, OraclePaginationStrategy } from "../contracts/index.js";
-import type { AuditEvent } from "../audit/index.js";
+import type { AuditLogger } from "../audit/index.js";
 import type { PermissionChecker, RequestIdentity } from "./permissions.js";
 import { buildSelectQuery, type QueryRequestFilter, type QueryRequestSort } from "../database/query-builder.js";
 import { transformReadValue, applyReadPermissionMask } from "../transformers/engine.js";
 import { translateOracleError } from "../errors/translator.js";
-
-export type AuditLogger = {
-  log(event: Omit<AuditEvent, "id" | "occurredAt">): void;
-};
 
 export type ReadHandlerContext = {
   cache: ContractCache;

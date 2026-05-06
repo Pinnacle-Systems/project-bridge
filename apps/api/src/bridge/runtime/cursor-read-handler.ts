@@ -4,10 +4,15 @@ import type {
   ResolvedApiContract,
   ApiFieldMapping
 } from "../contracts/index.js";
-import type { AuditEvent } from "../audit/index.js";
+import type { AuditLogger } from "../audit/index.js";
 import type { PermissionChecker, RequestIdentity } from "./permissions.js";
 import { transformReadValue, applyReadPermissionMask } from "../transformers/engine.js";
 import { translateOracleError } from "../errors/translator.js";
+import {
+  buildOutBind,
+  buildProcedureName,
+  type OracleBindTypeRegistry
+} from "./oracle-helpers.js";
 
 // ─── Cursor abstraction ─────────────────────────────────────────────────
 // Oracle's oracledb ResultSet is modelled here as a thin interface so the
@@ -22,15 +27,12 @@ export type CursorLike = {
 
 // ─── Public types ───────────────────────────────────────────────────────
 
-export type AuditLogger = {
-  log(event: Omit<AuditEvent, "id" | "occurredAt">): void;
-};
-
 export type CursorReadHandlerContext = {
   cache: ContractCache;
   adapter: OracleConnectorAdapter;
   permissions: PermissionChecker;
   audit?: AuditLogger;
+  oracleBindTypes: OracleBindTypeRegistry;
   /** Per-fetch batch size when iterating the cursor. Default: 100. */
   fetchBatchSize?: number;
 };
@@ -65,9 +67,8 @@ export function createCursorReadHandler(ctx: CursorReadHandlerContext) {
     }
 
     // 2. Validate operation enabled and mode is package/procedure
-    const policy = contract.operations.find(
-      op => op.operation === "read" || op.operation === "list"
-    );
+    // Cursor reads always return a collection, so resolve against the "list" policy.
+    const policy = contract.operations.find(op => op.operation === "list");
     if (!policy?.enabled) {
       return { status: 404, body: { error: "Not found." } };
     }
@@ -111,7 +112,7 @@ export function createCursorReadHandler(ctx: CursorReadHandlerContext) {
         param.oracleType === "sys_refcursor" &&
         (param.direction === "out" || param.direction === "return")
       ) {
-        binds[param.paramName] = { dir: "out", type: "sys_refcursor" };
+        binds[param.paramName] = buildOutBind(param.oracleType, ctx.oracleBindTypes);
       }
     }
 
@@ -247,12 +248,4 @@ async function closeCursorSafely(cursor: CursorLike): Promise<void> {
   } catch {
     // Intentionally swallowed — the original error is more important.
   }
-}
-
-function buildProcedureName(contract: ResolvedApiContract): string {
-  const { owner, type, packageName, procedureName, name } = contract.source;
-  if (type === "package") {
-    return `${owner}.${packageName}.${procedureName}`;
-  }
-  return `${owner}.${procedureName ?? name}`;
 }

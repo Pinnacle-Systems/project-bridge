@@ -8,6 +8,18 @@ import type { ContractCache } from "../../contracts/contract-cache.js";
 import type { ResolvedApiContract } from "../../contracts/index.js";
 import type { OracleConnectorAdapter } from "../../connections/oracle-adapter.js";
 import { createPermissiveChecker } from "../permissions.js";
+import { testOracleBindTypes, type OracleBindTypeRegistry } from "../oracle-helpers.js";
+
+const numericOracleBindTypes: OracleBindTypeRegistry = {
+  string: 2001,
+  number: 2002,
+  date: 2011,
+  timestamp: 2012,
+  cursor: 2004,
+  buffer: 2007,
+  clob: 2017,
+  blob: 2019
+};
 
 /**
  * Example contract:
@@ -99,6 +111,7 @@ function makeCtx(cursor: CursorLike, overrides: Partial<CursorReadHandlerContext
     cache: makeCache(makeContract()),
     adapter: makeAdapter(cursor),
     permissions: createPermissiveChecker(),
+    oracleBindTypes: testOracleBindTypes,
     ...overrides
   };
 }
@@ -120,6 +133,17 @@ describe("CursorReadHandler", () => {
       { id: 1, name: "Alice", isActive: true },
       { id: 2, name: "Bob",   isActive: false }
     ]);
+  });
+
+  it("uses configured driver bind constant for SYS_REFCURSOR OUT params.", async () => {
+    const cursor = makeCursor([]);
+    const adapter = makeAdapter(cursor);
+    const handle = createCursorReadHandler(makeCtx(cursor, { adapter, oracleBindTypes: numericOracleBindTypes }));
+
+    await handle({ contractPath: "/api/hr/employees" });
+
+    const binds = (adapter.executePlsqlBlock as any).mock.calls[0][1];
+    expect(binds.P_RESULT).toEqual({ dir: "out", type: numericOracleBindTypes.cursor });
   });
 
   it("2. CHAR trim applies to cursor row values.", async () => {

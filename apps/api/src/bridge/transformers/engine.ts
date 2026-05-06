@@ -8,7 +8,7 @@ export function transformReadValue(value: unknown, field: ApiFieldMapping): unkn
     return null;
   }
 
-  let result = value;
+  let result: unknown = value;
 
   // 2. Oracle type normalization (raw Oracle value -> normalized)
   if (field.oracleType === "date" || field.oracleType === "timestamp") {
@@ -34,6 +34,10 @@ export function transformReadValue(value: unknown, field: ApiFieldMapping): unkn
           result = true;
         } else if (result === transformer.falseValue) {
           result = false;
+        } else if (field.nullable === false) {
+          throw new Error(`Field ${field.apiField} has an unmapped boolean value.`);
+        } else {
+          result = null;
         }
       }
     }
@@ -69,7 +73,7 @@ export function transformWriteValue(value: unknown, field: ApiFieldMapping): unk
   // 1. API value validation — reject values that don't match field.apiType
   validateApiType(value, field);
 
-  let result = value;
+  let result: unknown = value;
 
   // 2. configured transformer (reverse boolean mapping for writes)
   if (field.transformers) {

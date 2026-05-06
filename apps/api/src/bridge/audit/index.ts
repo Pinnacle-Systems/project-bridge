@@ -12,3 +12,7 @@ export type AuditEvent = {
   actor?: string;
   metadata?: Record<string, unknown>;
 };
+
+export type AuditLogger = {
+  log(event: Omit<AuditEvent, "id" | "occurredAt">): void;
+};

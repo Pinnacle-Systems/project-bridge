@@ -75,7 +75,19 @@ describe("Type Transformer Engine", () => {
     expect(transformWriteValue(false, field)).toBe(0);
   });
 
-  it("8. null handling follows nullable config", () => {
+  it("8. DATE/TIMESTAMP normalization to API date-time string on read", () => {
+    const dateField: ApiFieldMapping = {
+      apiField: "createdAt",
+      apiType: "date-time",
+      oracleType: "timestamp"
+    };
+    const date = new Date("2026-05-06T10:00:00Z");
+    expect(transformReadValue(date, dateField)).toBe("2026-05-06T10:00:00.000Z");
+    expect(transformReadValue("2026-05-06T10:00:00.000Z", dateField)).toBe("2026-05-06T10:00:00.000Z");
+    expect(transformWriteValue("2026-05-06T10:00:00.000Z", dateField)).toEqual(date);
+  });
+
+  it("9. null handling follows nullable config", () => {
     const nullableField: ApiFieldMapping = {
       apiField: "optionalData",
       apiType: "string",
@@ -95,16 +107,28 @@ describe("Type Transformer Engine", () => {
     expect(() => transformWriteValue(null, requiredField)).toThrowError("Field requiredData cannot be null.");
   });
 
-  it("DATE/TIMESTAMP normalization to API date-time string on read", () => {
-    const dateField: ApiFieldMapping = {
-      apiField: "createdAt",
-      apiType: "date-time",
-      oracleType: "timestamp"
+  it("10. unmapped nullable boolean DB value maps to null", () => {
+    const field: ApiFieldMapping = {
+      apiField: "isActive",
+      apiType: "boolean",
+      oracleType: "char",
+      nullable: true,
+      transformers: [{ kind: "booleanMapping", oracleType: "char", trueValue: "Y", falseValue: "N" }]
     };
-    const date = new Date("2026-05-06T10:00:00Z");
-    expect(transformReadValue(date, dateField)).toBe("2026-05-06T10:00:00.000Z");
-    expect(transformReadValue("2026-05-06T10:00:00.000Z", dateField)).toBe("2026-05-06T10:00:00.000Z");
-    expect(transformWriteValue("2026-05-06T10:00:00.000Z", dateField)).toEqual(date);
+
+    expect(transformReadValue("X", field)).toBe(null);
+  });
+
+  it("11. unmapped required boolean DB value is rejected", () => {
+    const field: ApiFieldMapping = {
+      apiField: "isActive",
+      apiType: "boolean",
+      oracleType: "char",
+      nullable: false,
+      transformers: [{ kind: "booleanMapping", oracleType: "char", trueValue: "Y", falseValue: "N" }]
+    };
+
+    expect(() => transformReadValue("X", field)).toThrowError("Field isActive has an unmapped boolean value.");
   });
 
   describe("Write API type validation", () => {

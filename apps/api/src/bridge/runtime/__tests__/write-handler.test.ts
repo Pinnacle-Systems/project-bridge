@@ -4,6 +4,18 @@ import type { ContractCache } from "../../contracts/contract-cache.js";
 import type { ResolvedApiContract } from "../../contracts/index.js";
 import type { OracleConnectorAdapter } from "../../connections/oracle-adapter.js";
 import { createPermissiveChecker } from "../permissions.js";
+import { testOracleBindTypes, type OracleBindTypeRegistry } from "../oracle-helpers.js";
+
+const numericOracleBindTypes: OracleBindTypeRegistry = {
+  string: 2001,
+  number: 2002,
+  date: 2011,
+  timestamp: 2012,
+  cursor: 2004,
+  buffer: 2007,
+  clob: 2017,
+  blob: 2019
+};
 
 /**
  * Example procedure-backed contract:
@@ -76,6 +88,7 @@ function makeCtx(overrides: Partial<WriteHandlerContext> = {}): WriteHandlerCont
     cache: makeCache(makeContract()),
     adapter: makeAdapter({ P_EMPLOYEE_ID: 1001 }),
     permissions: createPermissiveChecker(),
+    oracleBindTypes: testOracleBindTypes,
     ...overrides
   };
 }
@@ -122,6 +135,20 @@ describe("WriteHandler", () => {
 
     expect(status).toBe(201);
     expect((body as any).data).toEqual({ employeeId: 1001 });
+  });
+
+  it("uses configured driver bind constants for OUT params.", async () => {
+    const adapter = makeAdapter({ P_EMPLOYEE_ID: 1001 });
+    const handle = createWriteHandler(makeCtx({ adapter, oracleBindTypes: numericOracleBindTypes }));
+
+    await handle({
+      contractPath: "/api/hr/employees",
+      method: "POST",
+      body: { employeeName: "Bob", departmentId: 20 }
+    });
+
+    const binds = (adapter.executePlsqlBlock as any).mock.calls[0][1];
+    expect(binds.P_EMPLOYEE_ID).toEqual({ dir: "out", type: numericOracleBindTypes.number });
   });
 
   it("3. Unknown field rejected.", async () => {

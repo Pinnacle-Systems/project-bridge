@@ -65,9 +65,13 @@ export type ApiFieldMapping = {
   transformers?: OracleTransformer[];
 };
 
+export type OperationMode = "package_procedure" | "direct_table";
+
 export type OperationPolicy = {
   operation: ContractOperation;
   enabled: boolean;
+  /** Execution mode. Defaults to "package_procedure" if omitted. */
+  mode?: OperationMode;
   permission?: string;
   allowedFields?: string[];
   requiredFields?: string[];
