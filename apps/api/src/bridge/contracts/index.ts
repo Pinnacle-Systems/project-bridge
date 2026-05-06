@@ -126,10 +126,12 @@ export type SysRefCursorMapping = {
 };
 
 export type ErrorMapping = {
-  oracleCode: string;
+  oracleCode?: string;
+  constraintName?: string;
   apiCode: string;
   httpStatus: number;
   message: string;
+  apiField?: string;
 };
 
 export type SchemaHealthStatus = "healthy" | "drift_detected" | "invalid" | "unknown";

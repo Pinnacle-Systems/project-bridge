@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { transformReadValue, transformWriteValue } from "../engine.js";
+import { transformReadValue, transformWriteValue, applyReadPermissionMask } from "../engine.js";
 import type { ApiFieldMapping } from "../../contracts/index.js";
 
 describe("Type Transformer Engine", () => {
@@ -10,7 +10,6 @@ describe("Type Transformer Engine", () => {
       oracleType: "char",
       transformers: [{ kind: "trimRight", oracleType: "char" }]
     };
-    
     expect(transformReadValue("ACTIVE   ", field)).toBe("ACTIVE");
   });
 
@@ -19,10 +18,7 @@ describe("Type Transformer Engine", () => {
       apiField: "description",
       apiType: "string",
       oracleType: "varchar2"
-      // no trimRight transformer
     };
-    
-    // Space is preserved because there's no trimRight transformer
     expect(transformReadValue("Notes   ", field)).toBe("Notes   ");
   });
 
@@ -33,7 +29,6 @@ describe("Type Transformer Engine", () => {
       oracleType: "char",
       transformers: [{ kind: "booleanMapping", oracleType: "char", trueValue: "Y", falseValue: "N" }]
     };
-    
     expect(transformReadValue("Y", field)).toBe(true);
   });
 
@@ -44,7 +39,6 @@ describe("Type Transformer Engine", () => {
       oracleType: "char",
       transformers: [{ kind: "booleanMapping", oracleType: "char", trueValue: "Y", falseValue: "N" }]
     };
-    
     expect(transformReadValue("N", field)).toBe(false);
   });
 
@@ -55,7 +49,6 @@ describe("Type Transformer Engine", () => {
       oracleType: "char",
       transformers: [{ kind: "booleanMapping", oracleType: "char", trueValue: "Y", falseValue: "N" }]
     };
-    
     expect(transformWriteValue(true, field)).toBe("Y");
   });
 
@@ -66,7 +59,6 @@ describe("Type Transformer Engine", () => {
       oracleType: "char",
       transformers: [{ kind: "booleanMapping", oracleType: "char", trueValue: "Y", falseValue: "N" }]
     };
-    
     expect(transformWriteValue(false, field)).toBe("N");
   });
 
@@ -77,7 +69,6 @@ describe("Type Transformer Engine", () => {
       oracleType: "number",
       transformers: [{ kind: "booleanMapping", oracleType: "number", trueValue: 1, falseValue: 0 }]
     };
-    
     expect(transformReadValue(1, field)).toBe(true);
     expect(transformReadValue(0, field)).toBe(false);
     expect(transformWriteValue(true, field)).toBe(1);
@@ -91,7 +82,6 @@ describe("Type Transformer Engine", () => {
       oracleType: "varchar2",
       nullable: true
     };
-
     const requiredField: ApiFieldMapping = {
       apiField: "requiredData",
       apiType: "string",
@@ -99,11 +89,8 @@ describe("Type Transformer Engine", () => {
       nullable: false
     };
 
-    // Nullable is allowed
     expect(transformReadValue(null, nullableField)).toBe(null);
     expect(transformWriteValue(null, nullableField)).toBe(null);
-
-    // Required throws
     expect(() => transformReadValue(null, requiredField)).toThrowError("Field requiredData cannot be null.");
     expect(() => transformWriteValue(null, requiredField)).toThrowError("Field requiredData cannot be null.");
   });
@@ -114,16 +101,104 @@ describe("Type Transformer Engine", () => {
       apiType: "date-time",
       oracleType: "timestamp"
     };
-
     const date = new Date("2026-05-06T10:00:00Z");
-    
-    // Read: Date -> ISO string
     expect(transformReadValue(date, dateField)).toBe("2026-05-06T10:00:00.000Z");
-
-    // Read: ISO string -> ISO string
     expect(transformReadValue("2026-05-06T10:00:00.000Z", dateField)).toBe("2026-05-06T10:00:00.000Z");
-
-    // Write: ISO string -> Date
     expect(transformWriteValue("2026-05-06T10:00:00.000Z", dateField)).toEqual(date);
+  });
+
+  describe("Write API type validation", () => {
+    const boolField: ApiFieldMapping = { apiField: "active", apiType: "boolean", oracleType: "char",
+      transformers: [{ kind: "booleanMapping", oracleType: "char", trueValue: "Y", falseValue: "N" }]
+    };
+    const strField: ApiFieldMapping  = { apiField: "name",   apiType: "string",  oracleType: "varchar2" };
+    const numField: ApiFieldMapping  = { apiField: "salary", apiType: "number",  oracleType: "number"  };
+    const intField: ApiFieldMapping  = { apiField: "age",    apiType: "integer", oracleType: "number"  };
+
+    it("rejects string 'true' for boolean field", () => {
+      expect(() => transformWriteValue("true", boolField)).toThrowError("expects a boolean");
+    });
+
+    it("rejects string 'Y' for boolean field", () => {
+      expect(() => transformWriteValue("Y", boolField)).toThrowError("expects a boolean");
+    });
+
+    it("rejects number 1 for boolean field", () => {
+      expect(() => transformWriteValue(1, boolField)).toThrowError("expects a boolean");
+    });
+
+    it("rejects object for boolean field", () => {
+      expect(() => transformWriteValue({}, boolField)).toThrowError("expects a boolean");
+    });
+
+    it("rejects number for string field", () => {
+      expect(() => transformWriteValue(42, strField)).toThrowError("expects a string");
+    });
+
+    it("rejects string for number field", () => {
+      expect(() => transformWriteValue("42", numField)).toThrowError("expects a number");
+    });
+
+    it("rejects float for integer field", () => {
+      expect(() => transformWriteValue(3.14, intField)).toThrowError("expects an integer");
+    });
+
+    it("rejects invalid date string", () => {
+      const dateField: ApiFieldMapping = { apiField: "dob", apiType: "date", oracleType: "date" };
+      expect(() => transformWriteValue("not-a-date", dateField)).toThrowError("invalid date");
+    });
+
+    it("accepts valid date string", () => {
+      const dateField: ApiFieldMapping = { apiField: "dob", apiType: "date", oracleType: "date" };
+      expect(() => transformWriteValue("2026-01-01", dateField)).not.toThrow();
+    });
+
+    it("rejects array for object field", () => {
+      const objField: ApiFieldMapping = { apiField: "meta", apiType: "object", oracleType: "clob" };
+      expect(() => transformWriteValue([1, 2], objField)).toThrowError("expects a plain object");
+    });
+
+    it("accepts plain object for object field", () => {
+      const objField: ApiFieldMapping = { apiField: "meta", apiType: "object", oracleType: "clob" };
+      expect(() => transformWriteValue({ key: "val" }, objField)).not.toThrow();
+    });
+
+    it("rejects string for array field", () => {
+      const arrField: ApiFieldMapping = { apiField: "tags", apiType: "array", oracleType: "clob" };
+      expect(() => transformWriteValue("not-an-array", arrField)).toThrowError("expects an array");
+    });
+
+    it("accepts array for array field", () => {
+      const arrField: ApiFieldMapping = { apiField: "tags", apiType: "array", oracleType: "clob" };
+      expect(() => transformWriteValue(["a", "b"], arrField)).not.toThrow();
+    });
+
+    it("rejects number for binary field", () => {
+      const binField: ApiFieldMapping = { apiField: "avatar", apiType: "binary", oracleType: "blob" };
+      expect(() => transformWriteValue(12345, binField)).toThrowError("expects a base64 string or Buffer");
+    });
+
+    it("accepts string for binary field", () => {
+      const binField: ApiFieldMapping = { apiField: "avatar", apiType: "binary", oracleType: "blob" };
+      expect(() => transformWriteValue("aGVsbG8=", binField)).not.toThrow();
+    });
+  });
+
+  describe("Read permission masking (step 4)", () => {
+    const field: ApiFieldMapping = { apiField: "salary", apiType: "number", oracleType: "number" };
+
+    it("returns value when field is in allowedFields", () => {
+      const allowed = new Set(["salary"]);
+      expect(applyReadPermissionMask(50000, field, allowed)).toBe(50000);
+    });
+
+    it("returns undefined when field is NOT in allowedFields", () => {
+      const allowed = new Set(["name"]);
+      expect(applyReadPermissionMask(50000, field, allowed)).toBeUndefined();
+    });
+
+    it("returns value when allowedFields is undefined (no restriction)", () => {
+      expect(applyReadPermissionMask(50000, field, undefined)).toBe(50000);
+    });
   });
 });

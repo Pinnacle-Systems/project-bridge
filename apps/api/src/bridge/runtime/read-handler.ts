@@ -4,7 +4,8 @@ import type { ApiFieldMapping, OraclePaginationStrategy } from "../contracts/ind
 import type { AuditEvent } from "../audit/index.js";
 import type { PermissionChecker, RequestIdentity } from "./permissions.js";
 import { buildSelectQuery, type QueryRequestFilter, type QueryRequestSort } from "../database/query-builder.js";
-import { transformReadValue } from "../transformers/engine.js";
+import { transformReadValue, applyReadPermissionMask } from "../transformers/engine.js";
+import { translateOracleError } from "../errors/translator.js";
 
 export type AuditLogger = {
   log(event: Omit<AuditEvent, "id" | "occurredAt">): void;
@@ -88,7 +89,15 @@ export function createReadHandler(ctx: ReadHandlerContext) {
           error: (err as Error).message
         }
       });
-      return { status: 500, body: { error: "Database error." } };
+      const translated = translateOracleError(err, contract);
+      return {
+        status: translated.statusCode,
+        body: {
+          error: translated.message,
+          code: translated.code,
+          ...(translated.field ? { field: translated.field } : {})
+        }
+      };
     }
 
     // Steps 8/9/10: Map DB columns → API fields, apply transformers, apply field-level permissions
@@ -120,10 +129,16 @@ function mapRow(
   fields: ApiFieldMapping[],
   allowedApiFields?: string[]
 ): Record<string, unknown> {
+  const allowedSet = allowedApiFields ? new Set(allowedApiFields) : undefined;
   const result: Record<string, unknown> = {};
   for (const field of fields) {
-    if (allowedApiFields && !allowedApiFields.includes(field.apiField)) continue;
-    result[field.apiField] = transformReadValue(row[field.dbColumn!], field);
+    // Steps 8/9: map DB column -> API field, apply transformers
+    const transformed = transformReadValue(row[field.dbColumn!], field);
+    // Step 10: permission masking (undefined means field is hidden)
+    const masked = applyReadPermissionMask(transformed, field, allowedSet);
+    if (masked !== undefined) {
+      result[field.apiField] = masked;
+    }
   }
   return result;
 }

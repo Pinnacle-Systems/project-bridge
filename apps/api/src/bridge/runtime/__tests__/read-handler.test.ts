@@ -146,4 +146,53 @@ describe("ReadHandler", () => {
       expect.objectContaining({ outFormat: "object" })
     );
   });
+  it("7. ORA-00942 returns 500 with CONTRACT_SCHEMA_MISMATCH code.", async () => {
+    const adapter = makeAdapter([]);
+    (adapter.query as any).mockRejectedValue(new Error("ORA-00942: table or view does not exist"));
+    const handle = createReadHandler(makeCtx({ adapter }));
+
+    const { status, body } = await handle({ contractPath: "/api/hr/employees" });
+
+    expect(status).toBe(500);
+    expect((body as any).code).toBe("CONTRACT_SCHEMA_MISMATCH");
+    // Must not leak the raw ORA message
+    expect((body as any).error).not.toContain("ORA-00942");
+  });
+
+  it("8. ORA-01403 returns 404 with NOT_FOUND code.", async () => {
+    const adapter = makeAdapter([]);
+    (adapter.query as any).mockRejectedValue(new Error("ORA-01403: no data found"));
+    const handle = createReadHandler(makeCtx({ adapter }));
+
+    const { status, body } = await handle({ contractPath: "/api/hr/employees" });
+
+    expect(status).toBe(404);
+    expect((body as any).code).toBe("NOT_FOUND");
+  });
+
+  it("9. Contract constraint mapping produces custom error.", async () => {
+    const contract = makeContract({
+      errorMappings: [
+        {
+          constraintName: "EMP_EMAIL_UK",
+          apiCode: "EMAIL_TAKEN",
+          httpStatus: 409,
+          message: "Email already in use.",
+          apiField: "email"
+        }
+      ]
+    });
+    const adapter = makeAdapter([]);
+    (adapter.query as any).mockRejectedValue(
+      new Error("ORA-00001: unique constraint (HR.EMP_EMAIL_UK) violated")
+    );
+    const handle = createReadHandler(makeCtx({ cache: makeCache(contract), adapter }));
+
+    const { status, body } = await handle({ contractPath: "/api/hr/employees" });
+
+    expect(status).toBe(409);
+    expect((body as any).code).toBe("EMAIL_TAKEN");
+    expect((body as any).field).toBe("email");
+    expect((body as any).error).toBe("Email already in use.");
+  });
 });
