@@ -8,6 +8,7 @@ import {
   type ResolvedApiContract
 } from "./index.js";
 import type { StoredDraftContract, StoredPublishedContract } from "./draft-contracts.js";
+import { buildContractAuditMetadata, type AuditLogger } from "../audit/index.js";
 
 export type ContractPublishResult = {
   publishedContract: StoredPublishedContract;
@@ -106,7 +107,8 @@ export type ContractPublishService = {
 
 export function createContractPublishService(
   store: PublishContractStore,
-  compiler: ContractCompiler
+  compiler: ContractCompiler,
+  audit?: AuditLogger
 ): ContractPublishService {
   return {
     async publishDraftContract(draftId, publishedBy, changeReason) {
@@ -127,6 +129,16 @@ export function createContractPublishService(
         draft: draft.draftData as DraftApiContract,
         version,
         compiledBy: publishedBy
+      });
+      audit?.log({
+        type: "contract.compiled",
+        actor: publishedBy,
+        metadata: buildContractAuditMetadata({
+          resource: draft.resourceName,
+          endpoint: draft.endpointPath,
+          contractVersion: version,
+          actor: publishedBy
+        })
       });
 
       if (!compileResult.contract) {
@@ -158,12 +170,22 @@ export function createContractPublishService(
       });
       const deprecatedPrevious = [];
       for (const previous of previousActive) {
-        deprecatedPrevious.push(
-          await store.publishedContract.update({
-            where: { id: previous.id },
-            data: { status: "deprecated" }
+        const deprecated = await store.publishedContract.update({
+          where: { id: previous.id },
+          data: { status: "deprecated" }
+        });
+        deprecatedPrevious.push(deprecated);
+        audit?.log({
+          type: "contract.deprecated",
+          actor: publishedBy,
+          metadata: buildContractAuditMetadata({
+            resource: previous.resourceName,
+            endpoint: previous.endpointPath,
+            contractVersion: previous.version,
+            actor: publishedBy,
+            status: "deprecated"
           })
-        );
+        });
       }
 
       const publishedContract = await store.publishedContract.create({
@@ -198,6 +220,17 @@ export function createContractPublishService(
           actor: publishedBy,
           notes: changeReason
         }
+      });
+      audit?.log({
+        type: "contract.published",
+        actor: publishedBy,
+        metadata: buildContractAuditMetadata({
+          resource: draft.resourceName,
+          endpoint: draft.endpointPath,
+          contractVersion: version,
+          actor: publishedBy,
+          status: "active"
+        })
       });
 
       return {

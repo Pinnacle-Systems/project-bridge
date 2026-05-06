@@ -1,7 +1,12 @@
 import type { ContractCache } from "../contracts/contract-cache.js";
 import type { OracleConnectorAdapter } from "../connections/oracle-adapter.js";
 import type { ApiFieldMapping, OraclePaginationStrategy } from "../contracts/index.js";
-import type { AuditLogger } from "../audit/index.js";
+import {
+  buildRuntimeAuditMetadata,
+  extractOracleErrorCode,
+  isSchemaMismatchCode,
+  type AuditLogger
+} from "../audit/index.js";
 import type { PermissionChecker, RequestIdentity } from "./permissions.js";
 import { buildSelectQuery, type QueryRequestFilter, type QueryRequestSort } from "../database/query-builder.js";
 import { transformReadValue, applyReadPermissionMask } from "../transformers/engine.js";
@@ -23,6 +28,7 @@ export type ReadHandlerInput = {
   limit?: number;
   offset?: number;
   identity?: RequestIdentity;
+  requestId?: string;
 };
 
 export type ReadHandlerOutput = {
@@ -32,6 +38,7 @@ export type ReadHandlerOutput = {
 
 export function createReadHandler(ctx: ReadHandlerContext) {
   return async function handle(input: ReadHandlerInput): Promise<ReadHandlerOutput> {
+    const startedAt = Date.now();
     const operation = input.idParam !== undefined ? "read" : "list";
 
     // Step 1: Resolve contract from cache
@@ -45,6 +52,18 @@ export function createReadHandler(ctx: ReadHandlerContext) {
     if (!policy?.enabled) {
       return { status: 404, body: { error: "Not found." } };
     }
+
+    ctx.audit?.log({
+      type: "runtime.request.received",
+      metadata: buildRuntimeAuditMetadata({
+        contract,
+        operation,
+        status: "received",
+        startedAt,
+        requestId: input.requestId,
+        userId: input.identity?.userId
+      })
+    });
 
     // Step 4: Check permission
     if (policy.permission && !ctx.permissions.check(input.identity, policy.permission)) {
@@ -68,6 +87,18 @@ export function createReadHandler(ctx: ReadHandlerContext) {
       sql = built.sql;
       binds = built.binds;
     } catch (err) {
+      ctx.audit?.log({
+        type: "runtime.validation.failed",
+        metadata: buildRuntimeAuditMetadata({
+          contract,
+          operation,
+          status: "failed",
+          startedAt,
+          requestId: input.requestId,
+          userId: input.identity?.userId,
+          code: "VALIDATION_FAILED"
+        })
+      });
       return { status: 400, body: { error: (err as Error).message } };
     }
 
@@ -77,15 +108,36 @@ export function createReadHandler(ctx: ReadHandlerContext) {
       const result = await ctx.adapter.query<Record<string, unknown>>(sql, binds as any, { outFormat: "object" });
       rows = result.rows;
     } catch (err) {
-      ctx.audit?.log({
-        type: "runtime.request.failed",
-        metadata: {
-          contractId: contract.id,
-          contractPath: input.contractPath,
-          error: (err as Error).message
-        }
-      });
+      const oracleErrorCode = extractOracleErrorCode(err);
       const translated = translateOracleError(err, contract);
+      ctx.audit?.log({
+        type: "runtime.oracle.error",
+        metadata: buildRuntimeAuditMetadata({
+          contract,
+          operation,
+          status: "failed",
+          startedAt,
+          requestId: input.requestId,
+          userId: input.identity?.userId,
+          oracleErrorCode,
+          code: translated.code
+        })
+      });
+      if (isSchemaMismatchCode(oracleErrorCode)) {
+        ctx.audit?.log({
+          type: "runtime.schema_mismatch",
+          metadata: buildRuntimeAuditMetadata({
+            contract,
+            operation,
+            status: "failed",
+            startedAt,
+            requestId: input.requestId,
+            userId: input.identity?.userId,
+            oracleErrorCode,
+            code: translated.code
+          })
+        });
+      }
       return {
         status: translated.statusCode,
         body: {
@@ -102,13 +154,16 @@ export function createReadHandler(ctx: ReadHandlerContext) {
 
     // Step 12: Audit successful request
     ctx.audit?.log({
-      type: "runtime.request.received",
-      metadata: {
-        contractId: contract.id,
-        contractPath: input.contractPath,
+      type: "runtime.request.succeeded",
+      metadata: buildRuntimeAuditMetadata({
+        contract,
         operation,
+        status: "succeeded",
+        startedAt,
+        requestId: input.requestId,
+        userId: input.identity?.userId,
         resultCount: mapped.length
-      }
+      })
     });
 
     // Step 11: Return JSON response

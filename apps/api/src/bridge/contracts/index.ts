@@ -96,6 +96,7 @@ export type OptimisticLockingConfig = {
   apiField: string;
   dbColumn: string;
   oracleType: Extract<OracleScalarType, "number" | "date" | "timestamp">;
+  conflictApiField?: string;
 };
 
 export type PaginationConfig = {

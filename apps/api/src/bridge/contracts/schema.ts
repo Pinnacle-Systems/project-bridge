@@ -315,6 +315,9 @@ function validateOptimisticLocking(value: unknown, path: string, issues: Contrac
   requireBoolean(value, "enabled", issues, path);
   requireString(value, "apiField", issues, path);
   requireString(value, "dbColumn", issues, path);
+  if ("conflictApiField" in value && value.conflictApiField !== undefined) {
+    requireString(value, "conflictApiField", issues, path);
+  }
   if (!["number", "date", "timestamp"].includes(String(value.oracleType))) {
     issues.push({ path: `${path}.oracleType`, message: "optimisticLocking oracleType must be number, date, or timestamp." });
   }

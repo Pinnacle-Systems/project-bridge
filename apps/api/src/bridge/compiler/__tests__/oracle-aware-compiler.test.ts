@@ -734,4 +734,31 @@ describe("Oracle-aware contract compiler", () => {
       expect.arrayContaining([expect.objectContaining({ code: "SYS_REFCURSOR_WRITE_UNSUPPORTED" })])
     );
   });
+
+  it("requires procedure-backed optimistic locking to have mapped version param", async () => {
+    const compiler = createOracleAwareContractCompiler(createStore(packageSnapshot()));
+
+    const result = await compiler.compile({
+      apiConnectionId: "connection-1",
+      draft: packageCreateDraft({
+        operations: [{ operation: "update", enabled: true }],
+        optimisticLocking: {
+          enabled: true,
+          apiField: "version",
+          dbColumn: "VERSION_NO",
+          oracleType: "number"
+        }
+      })
+    });
+
+    expect(result.contract).toBeUndefined();
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "OPTIMISTIC_LOCKING_PROCEDURE_UNSUPPORTED",
+          severity: "error"
+        })
+      ])
+    );
+  });
 });

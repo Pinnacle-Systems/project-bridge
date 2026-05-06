@@ -5,7 +5,12 @@ import type {
   ProcedureParamMapping,
   ContractOperation
 } from "../contracts/index.js";
-import type { AuditLogger } from "../audit/index.js";
+import {
+  buildRuntimeAuditMetadata,
+  extractOracleErrorCode,
+  isSchemaMismatchCode,
+  type AuditLogger
+} from "../audit/index.js";
 import type { PermissionChecker, RequestIdentity } from "./permissions.js";
 import { transformWriteValue } from "../transformers/engine.js";
 import { translateOracleError } from "../errors/translator.js";
@@ -29,6 +34,7 @@ export type WriteHandlerInput = {
   method: "POST" | "PUT";
   body: Record<string, unknown>;
   identity?: RequestIdentity;
+  requestId?: string;
 };
 
 export type WriteHandlerOutput = {
@@ -40,6 +46,7 @@ export type WriteHandlerOutput = {
 
 export function createWriteHandler(ctx: WriteHandlerContext) {
   return async function handle(input: WriteHandlerInput): Promise<WriteHandlerOutput> {
+    const startedAt = Date.now();
     const operation: ContractOperation = input.method === "POST" ? "create" : "update";
     const httpMethod = input.method;
 
@@ -65,11 +72,26 @@ export function createWriteHandler(ctx: WriteHandlerContext) {
     if (!contract.procedureParams?.length) {
       return { status: 500, body: { error: "Contract is missing procedure parameter mappings." } };
     }
+    const optimisticLock = operation === "update" && contract.optimisticLocking?.enabled
+      ? contract.optimisticLocking
+      : undefined;
 
     // Check permission
     if (policy.permission && !ctx.permissions.check(input.identity, policy.permission)) {
       return { status: 403, body: { error: "Forbidden." } };
     }
+
+    ctx.audit?.log({
+      type: "runtime.request.received",
+      metadata: buildRuntimeAuditMetadata({
+        contract,
+        operation,
+        status: "received",
+        startedAt,
+        requestId: input.requestId,
+        userId: input.identity?.userId
+      })
+    });
 
     // Build a map of procedure params keyed by apiField for fast lookup
     const paramsByApiField = new Map<string, ProcedureParamMapping>();
@@ -77,6 +99,20 @@ export function createWriteHandler(ctx: WriteHandlerContext) {
       if (param.apiField) {
         paramsByApiField.set(param.apiField, param);
       }
+    }
+
+    if (
+      optimisticLock &&
+      !paramsByApiField.has(optimisticLock.apiField) &&
+      !optimisticLock.conflictApiField
+    ) {
+      return {
+        status: 500,
+        body: {
+          error: "Procedure-backed optimistic locking is not supported by this contract.",
+          code: "CONTRACT_INVALID"
+        }
+      };
     }
 
     // Build a field map for write-eligible API fields
@@ -130,6 +166,18 @@ export function createWriteHandler(ctx: WriteHandlerContext) {
           return { status: 400, body: { error: (err as Error).message } };
         }
       } else if (param.required) {
+        ctx.audit?.log({
+          type: "runtime.validation.failed",
+          metadata: buildRuntimeAuditMetadata({
+            contract,
+            operation,
+            status: "failed",
+            startedAt,
+            requestId: input.requestId,
+            userId: input.identity?.userId,
+            code: "VALIDATION_FAILED"
+          })
+        });
         return { status: 400, body: { error: `Required field '${param.apiField ?? param.paramName}' is missing.` } };
       }
     }
@@ -149,16 +197,36 @@ export function createWriteHandler(ctx: WriteHandlerContext) {
       outBinds = result.outBinds as Record<string, unknown> | undefined;
     } catch (err) {
       // 11. Translate Oracle/PL-SQL errors
-      ctx.audit?.log({
-        type: "runtime.request.failed",
-        metadata: {
-          contractId: contract.id,
-          contractPath: input.contractPath,
-          operation,
-          error: (err as Error).message
-        }
-      });
+      const oracleErrorCode = extractOracleErrorCode(err);
       const translated = translateOracleError(err, contract);
+      ctx.audit?.log({
+        type: "runtime.oracle.error",
+        metadata: buildRuntimeAuditMetadata({
+          contract,
+          operation,
+          status: "failed",
+          startedAt,
+          requestId: input.requestId,
+          userId: input.identity?.userId,
+          oracleErrorCode,
+          code: translated.code
+        })
+      });
+      if (isSchemaMismatchCode(oracleErrorCode)) {
+        ctx.audit?.log({
+          type: "runtime.schema_mismatch",
+          metadata: buildRuntimeAuditMetadata({
+            contract,
+            operation,
+            status: "failed",
+            startedAt,
+            requestId: input.requestId,
+            userId: input.identity?.userId,
+            oracleErrorCode,
+            code: translated.code
+          })
+        });
+      }
       return {
         status: translated.statusCode,
         body: {
@@ -177,15 +245,50 @@ export function createWriteHandler(ctx: WriteHandlerContext) {
       }
     }
 
+    if (optimisticLock?.conflictApiField && responseData[optimisticLock.conflictApiField]) {
+      ctx.audit?.log({
+        type: "runtime.optimistic_lock.conflict",
+        metadata: buildRuntimeAuditMetadata({
+          contract,
+          operation,
+          status: "failed",
+          startedAt,
+          requestId: input.requestId,
+          userId: input.identity?.userId,
+          code: "RECORD_MODIFIED"
+        })
+      });
+      return {
+        status: 412,
+        body: {
+          error: "Record was modified by another transaction.",
+          code: "RECORD_MODIFIED"
+        }
+      };
+    }
+
     // 12. Write audit log
     ctx.audit?.log({
-      type: "runtime.request.received",
-      metadata: {
-        contractId: contract.id,
-        contractPath: input.contractPath,
+      type: "runtime.plsql.executed",
+      metadata: buildRuntimeAuditMetadata({
+        contract,
         operation,
-        resultFields: Object.keys(responseData)
-      }
+        status: "succeeded",
+        startedAt,
+        requestId: input.requestId,
+        userId: input.identity?.userId
+      })
+    });
+    ctx.audit?.log({
+      type: "runtime.request.succeeded",
+      metadata: buildRuntimeAuditMetadata({
+        contract,
+        operation,
+        status: "succeeded",
+        startedAt,
+        requestId: input.requestId,
+        userId: input.identity?.userId
+      })
     });
 
     const status = operation === "create" ? 201 : 200;

@@ -4,7 +4,11 @@ import type {
   ResolvedApiContract,
   ApiFieldMapping
 } from "../contracts/index.js";
-import type { AuditLogger } from "../audit/index.js";
+import {
+  buildRuntimeAuditMetadata,
+  extractOracleErrorCode,
+  type AuditLogger
+} from "../audit/index.js";
 import type { PermissionChecker, RequestIdentity } from "./permissions.js";
 import { transformReadValue, applyReadPermissionMask } from "../transformers/engine.js";
 import { translateOracleError } from "../errors/translator.js";
@@ -42,6 +46,7 @@ export type CursorReadHandlerInput = {
   /** IN params sent by the caller (e.g. id for read-by-id). */
   params?: Record<string, unknown>;
   identity?: RequestIdentity;
+  requestId?: string;
   /** Override the contract-level maxRowLimit for this request. */
   maxRows?: number;
 };
@@ -60,6 +65,7 @@ const DEFAULT_MAX_ROWS = 1000;
 
 export function createCursorReadHandler(ctx: CursorReadHandlerContext) {
   return async function handle(input: CursorReadHandlerInput): Promise<CursorReadHandlerOutput> {
+    const startedAt = Date.now();
     // 1. Resolve contract
     const contract = ctx.cache.getContractByEndpoint("GET", input.contractPath);
     if (!contract) {
@@ -92,6 +98,18 @@ export function createCursorReadHandler(ctx: CursorReadHandlerContext) {
     if (policy.permission && !ctx.permissions.check(input.identity, policy.permission)) {
       return { status: 403, body: { error: "Forbidden." } };
     }
+
+    ctx.audit?.log({
+      type: "runtime.request.received",
+      metadata: buildRuntimeAuditMetadata({
+        contract,
+        operation: policy.operation,
+        status: "received",
+        startedAt,
+        requestId: input.requestId,
+        userId: input.identity?.userId
+      })
+    });
 
     // 3. Bind IN params from request
     const binds: Record<string, BindValue> = {};
@@ -130,15 +148,21 @@ export function createCursorReadHandler(ctx: CursorReadHandlerContext) {
       const result = await ctx.adapter.executePlsqlBlock(plsqlBlock, binds);
       outBinds = (result.outBinds as Record<string, unknown>) ?? {};
     } catch (err) {
-      ctx.audit?.log({
-        type: "runtime.request.failed",
-        metadata: {
-          contractId: contract.id,
-          contractPath: input.contractPath,
-          error: (err as Error).message
-        }
-      });
+      const oracleErrorCode = extractOracleErrorCode(err);
       const translated = translateOracleError(err, contract);
+      ctx.audit?.log({
+        type: "runtime.oracle.error",
+        metadata: buildRuntimeAuditMetadata({
+          contract,
+          operation: policy.operation,
+          status: "failed",
+          startedAt,
+          requestId: input.requestId,
+          userId: input.identity?.userId,
+          oracleErrorCode,
+          code: translated.code
+        })
+      });
       return {
         status: translated.statusCode,
         body: { error: translated.message, code: translated.code }
@@ -183,15 +207,21 @@ export function createCursorReadHandler(ctx: CursorReadHandlerContext) {
       // 12. Close cursor safely on iteration error
       await closeCursorSafely(cursor);
 
-      ctx.audit?.log({
-        type: "runtime.request.failed",
-        metadata: {
-          contractId: contract.id,
-          contractPath: input.contractPath,
-          error: (err as Error).message
-        }
-      });
+      const oracleErrorCode = extractOracleErrorCode(err);
       const translated = translateOracleError(err, contract);
+      ctx.audit?.log({
+        type: "runtime.oracle.error",
+        metadata: buildRuntimeAuditMetadata({
+          contract,
+          operation: policy.operation,
+          status: "failed",
+          startedAt,
+          requestId: input.requestId,
+          userId: input.identity?.userId,
+          oracleErrorCode,
+          code: translated.code
+        })
+      });
       return {
         status: translated.statusCode,
         body: { error: translated.message, code: translated.code }
@@ -203,14 +233,28 @@ export function createCursorReadHandler(ctx: CursorReadHandlerContext) {
 
     // 13. Write audit log
     ctx.audit?.log({
-      type: "runtime.request.received",
-      metadata: {
-        contractId: contract.id,
-        contractPath: input.contractPath,
+      type: "runtime.sys_refcursor.read",
+      metadata: buildRuntimeAuditMetadata({
+        contract,
         operation: policy.operation,
-        resultCount: mappedRows.length,
-        limitReached
-      }
+        status: "succeeded",
+        startedAt,
+        requestId: input.requestId,
+        userId: input.identity?.userId,
+        resultCount: mappedRows.length
+      })
+    });
+    ctx.audit?.log({
+      type: "runtime.request.succeeded",
+      metadata: buildRuntimeAuditMetadata({
+        contract,
+        operation: policy.operation,
+        status: "succeeded",
+        startedAt,
+        requestId: input.requestId,
+        userId: input.identity?.userId,
+        resultCount: mappedRows.length
+      })
     });
 
     // 10. Convert rows to JSON array

@@ -41,7 +41,8 @@ function makeContract(overrides: Partial<ResolvedApiContract> = {}): ResolvedApi
     fields: [
       { apiField: "id",       apiType: "integer", oracleType: "number",   dbColumn: "ID", readOnly: true },
       { apiField: "deptName", apiType: "string",  oracleType: "varchar2", dbColumn: "DEPT_NAME" },
-      { apiField: "location", apiType: "string",  oracleType: "varchar2", dbColumn: "LOCATION" }
+      { apiField: "location", apiType: "string",  oracleType: "varchar2", dbColumn: "LOCATION" },
+      { apiField: "version",  apiType: "integer", oracleType: "number",   dbColumn: "VERSION_NO", readOnly: true }
     ],
     operations: [
       { operation: "create", enabled: true, mode: "direct_table" },
@@ -276,5 +277,95 @@ describe("DirectWriteHandler", () => {
 
     expect(status).toBe(404);
     expect((body as any).error).toContain("Not found");
+  });
+
+  it("missing optimistic lock version returns validation error.", async () => {
+    const contract = makeContract({
+      optimisticLocking: {
+        enabled: true,
+        apiField: "version",
+        dbColumn: "VERSION_NO",
+        oracleType: "number"
+      }
+    });
+    const adapter = makeAdapter();
+    const handle = createDirectWriteHandler(makeCtx({ cache: makeCache(contract), adapter }));
+
+    const { status, body } = await handle({
+      contractPath: "/api/departments",
+      method: "PATCH",
+      body: { deptName: "Renamed" },
+      idParam: "7"
+    });
+
+    expect(status).toBe(400);
+    expect((body as any).code).toBe("VALIDATION_FAILED");
+    expect((body as any).field).toBe("version");
+    expect(adapter.execute).not.toHaveBeenCalled();
+  });
+
+  it("version mismatch returns 412 and writes conflict audit log.", async () => {
+    const contract = makeContract({
+      optimisticLocking: {
+        enabled: true,
+        apiField: "version",
+        dbColumn: "VERSION_NO",
+        oracleType: "number"
+      }
+    });
+    const adapter = makeAdapter();
+    (adapter.execute as any).mockResolvedValue({ rows: [], rowsAffected: 0 });
+    const audit = { log: vi.fn() };
+    const handle = createDirectWriteHandler(makeCtx({ cache: makeCache(contract), adapter, audit }));
+
+    const { status, body } = await handle({
+      contractPath: "/api/departments",
+      method: "PATCH",
+      body: { deptName: "Renamed", version: 3 },
+      idParam: "7"
+    });
+
+    expect(status).toBe(412);
+    expect((body as any).code).toBe("RECORD_MODIFIED");
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "runtime.optimistic_lock.conflict",
+        metadata: expect.objectContaining({
+          resource: "departments",
+          operation: "update",
+          code: "RECORD_MODIFIED",
+          status: "failed"
+        })
+      })
+    );
+  });
+
+  it("successful optimistic update increments version in direct DML.", async () => {
+    const contract = makeContract({
+      optimisticLocking: {
+        enabled: true,
+        apiField: "version",
+        dbColumn: "VERSION_NO",
+        oracleType: "number"
+      }
+    });
+    const adapter = makeAdapter();
+    const handle = createDirectWriteHandler(makeCtx({ cache: makeCache(contract), adapter }));
+
+    const { status } = await handle({
+      contractPath: "/api/departments",
+      method: "PATCH",
+      body: { deptName: "Renamed", version: 3 },
+      idParam: "7"
+    });
+
+    expect(status).toBe(200);
+    const sql = (adapter.execute as any).mock.calls[0][0] as string;
+    expect(sql).toContain('"VERSION_NO" = "VERSION_NO" + 1');
+    expect(sql).toContain('WHERE "ID" = :pkValue AND "VERSION_NO" = :lockValue');
+    const binds = (adapter.execute as any).mock.calls[0][1];
+    expect(binds.lockValue).toBe(3);
+    const setClause = sql.slice(sql.indexOf(" SET "), sql.indexOf(" WHERE "));
+    expect(setClause).not.toContain('"VERSION_NO" = :');
   });
 });

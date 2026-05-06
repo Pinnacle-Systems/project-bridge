@@ -207,10 +207,15 @@ describe("WriteHandler", () => {
 
     expect(audit.log).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: "runtime.request.received",
+        type: "runtime.request.succeeded",
         metadata: expect.objectContaining({
-          contractId: "c-write-1",
-          operation: "create"
+          resource: "employees",
+          endpoint: "/api/hr/employees",
+          contract_version: 1,
+          operation: "create",
+          oracle_package_name: "PKG_EMPLOYEE_API",
+          oracle_procedure_name: "CREATE_EMPLOYEE",
+          status: "succeeded"
         })
       })
     );
@@ -275,10 +280,13 @@ describe("WriteHandler", () => {
 
     expect(audit.log).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: "runtime.request.failed",
+        type: "runtime.oracle.error",
         metadata: expect.objectContaining({
-          contractId: "c-write-1",
-          operation: "create"
+          resource: "employees",
+          operation: "create",
+          oracle_error_code: "ORA-06550",
+          code: "PLSQL_EXECUTION_ERROR",
+          status: "failed"
         })
       })
     );

@@ -93,6 +93,7 @@ export function createOracleAwareContractCompiler(store: ContractCompilerStore):
         validateProcedureOperations(input.draft, diagnostics);
         validateProcedureParams(input.draft, programUnit, diagnostics);
         validateSysRefCursorUsage(input.draft, programUnit, diagnostics);
+        validateProcedureOptimisticLocking(input.draft, diagnostics);
       }
       validateFieldReferences(input.draft, diagnostics);
 
@@ -457,6 +458,48 @@ function validateSysRefCursorUsage(
     }
     apiFields.add(field.apiField);
   });
+}
+
+function validateProcedureOptimisticLocking(
+  draft: DraftApiContract,
+  diagnostics: ContractCompilerDiagnostic[]
+): void {
+  if (!draft.optimisticLocking?.enabled) {
+    return;
+  }
+
+  const updateEnabled = draft.operations.some(
+    (operation) =>
+      operation.operation === "update" &&
+      operation.enabled &&
+      operation.mode !== "direct_table"
+  );
+  if (!updateEnabled) {
+    return;
+  }
+
+  const hasLockParam = draft.procedureParams?.some(
+    (param) =>
+      param.apiField === draft.optimisticLocking?.apiField &&
+      (param.direction === "in" || param.direction === "inout")
+  );
+  const hasConflictParam =
+    draft.optimisticLocking.conflictApiField !== undefined &&
+    draft.procedureParams?.some(
+      (param) =>
+        param.apiField === draft.optimisticLocking?.conflictApiField &&
+        (param.direction === "out" || param.direction === "inout" || param.direction === "return")
+    );
+
+  if (!hasLockParam && !hasConflictParam) {
+    diagnostics.push(
+      error(
+        "OPTIMISTIC_LOCKING_PROCEDURE_UNSUPPORTED",
+        "Procedure-backed optimistic locking requires a version/timestamp IN param or configured conflict OUT param.",
+        "optimisticLocking"
+      )
+    );
+  }
 }
 
 function validateFieldReferences(draft: DraftApiContract, diagnostics: ContractCompilerDiagnostic[]): void {

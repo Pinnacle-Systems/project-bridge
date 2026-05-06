@@ -1,4 +1,5 @@
 import type { DraftApiContract, ResolvedApiContract } from "./index.js";
+import { buildContractAuditMetadata, type AuditLogger } from "../audit/index.js";
 
 export type DraftContractStatus = "draft" | "archived";
 
@@ -86,12 +87,12 @@ export type DraftContractService = {
   getPublishedContractByEndpoint(endpointPath: string): Promise<StoredPublishedContract | null>;
 };
 
-export function createDraftContractService(store: BridgeContractStore): DraftContractService {
+export function createDraftContractService(store: BridgeContractStore, audit?: AuditLogger): DraftContractService {
   return {
     async createDraftContract(input) {
       validateDraftContract(input.contract);
 
-      return store.apiContractDraft.create({
+      const draft = await store.apiContractDraft.create({
         data: {
           apiConnectionId: input.apiConnectionId,
           resourceName: input.contract.resource,
@@ -101,6 +102,17 @@ export function createDraftContractService(store: BridgeContractStore): DraftCon
           createdBy: input.createdBy
         }
       });
+      audit?.log({
+        type: "contract.draft.created",
+        actor: input.createdBy,
+        metadata: buildContractAuditMetadata({
+          resource: input.contract.resource,
+          endpoint: input.contract.endpoint,
+          actor: input.createdBy,
+          status: "draft"
+        })
+      });
+      return draft;
     },
 
     async updateDraftContract(id, input) {
@@ -108,7 +120,7 @@ export function createDraftContractService(store: BridgeContractStore): DraftCon
         validateDraftContract(input.contract);
       }
 
-      return store.apiContractDraft.update({
+      const draft = await store.apiContractDraft.update({
         where: { id },
         data: {
           ...(input.contract
@@ -121,6 +133,17 @@ export function createDraftContractService(store: BridgeContractStore): DraftCon
           updatedBy: input.updatedBy
         }
       });
+      audit?.log({
+        type: "contract.draft.updated",
+        actor: input.updatedBy,
+        metadata: buildContractAuditMetadata({
+          resource: draft.resourceName,
+          endpoint: draft.endpointPath,
+          actor: input.updatedBy,
+          status: draft.status
+        })
+      });
+      return draft;
     },
 
     async getDraftContract(id) {
@@ -138,13 +161,24 @@ export function createDraftContractService(store: BridgeContractStore): DraftCon
     },
 
     async archiveDraftContract(id, updatedBy) {
-      return store.apiContractDraft.update({
+      const draft = await store.apiContractDraft.update({
         where: { id },
         data: {
           status: "archived",
           updatedBy
         }
       });
+      audit?.log({
+        type: "contract.retired",
+        actor: updatedBy,
+        metadata: buildContractAuditMetadata({
+          resource: draft.resourceName,
+          endpoint: draft.endpointPath,
+          actor: updatedBy,
+          status: draft.status
+        })
+      });
+      return draft;
     },
 
     async getPublishedContractByEndpoint(endpointPath) {

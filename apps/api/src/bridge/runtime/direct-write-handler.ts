@@ -6,7 +6,12 @@ import type {
   ContractOperation,
   IdGenerationConfig
 } from "../contracts/index.js";
-import type { AuditLogger } from "../audit/index.js";
+import {
+  buildRuntimeAuditMetadata,
+  extractOracleErrorCode,
+  isSchemaMismatchCode,
+  type AuditLogger
+} from "../audit/index.js";
 import type { PermissionChecker, RequestIdentity } from "./permissions.js";
 import { transformWriteValue } from "../transformers/engine.js";
 import { translateOracleError } from "../errors/translator.js";
@@ -28,6 +33,7 @@ export type DirectWriteHandlerInput = {
   /** Primary key value — required for PATCH/update. */
   idParam?: string;
   identity?: RequestIdentity;
+  requestId?: string;
 };
 
 export type DirectWriteHandlerOutput = {
@@ -39,6 +45,7 @@ export type DirectWriteHandlerOutput = {
 
 export function createDirectWriteHandler(ctx: DirectWriteHandlerContext) {
   return async function handle(input: DirectWriteHandlerInput): Promise<DirectWriteHandlerOutput> {
+    const startedAt = Date.now();
     const operation: ContractOperation = input.method === "POST" ? "create" : "update";
     const httpMethod = input.method;
 
@@ -73,20 +80,60 @@ export function createDirectWriteHandler(ctx: DirectWriteHandlerContext) {
       return { status: 403, body: { error: "Forbidden." } };
     }
 
+    ctx.audit?.log({
+      type: "runtime.request.received",
+      metadata: buildRuntimeAuditMetadata({
+        contract,
+        operation,
+        status: "received",
+        startedAt,
+        requestId: input.requestId,
+        userId: input.identity?.userId
+      })
+    });
+
     // Build writable field map
     const writableFields = contract.fields.filter(f => !f.readOnly);
     const writableFieldMap = new Map(writableFields.map(f => [f.apiField, f] as const));
     const allFieldMap = new Map(contract.fields.map(f => [f.apiField, f] as const));
 
+    const optimisticLock = contract.optimisticLocking?.enabled ? contract.optimisticLocking : undefined;
+
+    if (operation === "update" && optimisticLock && !(optimisticLock.apiField in input.body)) {
+      ctx.audit?.log({
+        type: "runtime.validation.failed",
+        metadata: buildRuntimeAuditMetadata({
+          contract,
+          operation,
+          status: "failed",
+          startedAt,
+          requestId: input.requestId,
+          userId: input.identity?.userId,
+          code: "VALIDATION_FAILED"
+        })
+      });
+      return {
+        status: 400,
+        body: {
+          error: `Missing optimistic lock field '${optimisticLock.apiField}'.`,
+          code: "VALIDATION_FAILED",
+          field: optimisticLock.apiField
+        }
+      };
+    }
+
     // 3. Reject unknown fields
     for (const key of Object.keys(input.body)) {
-      if (!allFieldMap.has(key)) {
+      if (!allFieldMap.has(key) && key !== optimisticLock?.apiField) {
         return { status: 400, body: { error: `Unknown field: ${key}` } };
       }
     }
 
     // 4. Reject read-only fields
     for (const key of Object.keys(input.body)) {
+      if (key === optimisticLock?.apiField) {
+        continue;
+      }
       const fieldDef = allFieldMap.get(key)!;
       if (fieldDef.readOnly) {
         return { status: 400, body: { error: `Field '${key}' is read-only.` } };
@@ -99,6 +146,9 @@ export function createDirectWriteHandler(ctx: DirectWriteHandlerContext) {
     let bindIndex = 1;
 
     for (const [apiField, value] of Object.entries(input.body)) {
+      if (apiField === optimisticLock?.apiField) {
+        continue;
+      }
       const fieldDef = writableFieldMap.get(apiField);
       if (!fieldDef || !fieldDef.dbColumn) continue;
 
@@ -140,8 +190,11 @@ export function createDirectWriteHandler(ctx: DirectWriteHandlerContext) {
         return { status: 500, body: { error: "Contract has no identifiable primary key field." } };
       }
 
-      sql = buildUpdateSql(qualifiedTable, columns, pkField.dbColumn);
+      sql = buildUpdateSql(qualifiedTable, columns, pkField.dbColumn, optimisticLock);
       binds.pkValue = input.idParam;
+      if (optimisticLock) {
+        binds.lockValue = input.body[optimisticLock.apiField];
+      }
     }
 
     // Execute
@@ -159,20 +212,61 @@ export function createDirectWriteHandler(ctx: DirectWriteHandlerContext) {
 
       if (operation === "update") {
         if (result.rowsAffected === 0) {
+          if (optimisticLock) {
+            ctx.audit?.log({
+              type: "runtime.optimistic_lock.conflict",
+              metadata: buildRuntimeAuditMetadata({
+                contract,
+                operation,
+                status: "failed",
+                startedAt,
+                requestId: input.requestId,
+                userId: input.identity?.userId,
+                code: "RECORD_MODIFIED"
+              })
+            });
+            return {
+              status: 412,
+              body: {
+                error: "Record was modified by another transaction.",
+                code: "RECORD_MODIFIED"
+              }
+            };
+          }
           return { status: 404, body: { error: "Not found." } };
         }
       }
     } catch (err) {
-      ctx.audit?.log({
-        type: "runtime.request.failed",
-        metadata: {
-          contractId: contract.id,
-          contractPath: input.contractPath,
-          operation,
-          error: (err as Error).message
-        }
-      });
+      const oracleErrorCode = extractOracleErrorCode(err);
       const translated = translateOracleError(err, contract);
+      ctx.audit?.log({
+        type: "runtime.oracle.error",
+        metadata: buildRuntimeAuditMetadata({
+          contract,
+          operation,
+          status: "failed",
+          startedAt,
+          requestId: input.requestId,
+          userId: input.identity?.userId,
+          oracleErrorCode,
+          code: translated.code
+        })
+      });
+      if (isSchemaMismatchCode(oracleErrorCode)) {
+        ctx.audit?.log({
+          type: "runtime.schema_mismatch",
+          metadata: buildRuntimeAuditMetadata({
+            contract,
+            operation,
+            status: "failed",
+            startedAt,
+            requestId: input.requestId,
+            userId: input.identity?.userId,
+            oracleErrorCode,
+            code: translated.code
+          })
+        });
+      }
       return {
         status: translated.statusCode,
         body: {
@@ -185,13 +279,15 @@ export function createDirectWriteHandler(ctx: DirectWriteHandlerContext) {
 
     // Audit
     ctx.audit?.log({
-      type: "runtime.request.received",
-      metadata: {
-        contractId: contract.id,
-        contractPath: input.contractPath,
+      type: "runtime.request.succeeded",
+      metadata: buildRuntimeAuditMetadata({
+        contract,
         operation,
-        affectedColumns: columns
-      }
+        status: "succeeded",
+        startedAt,
+        requestId: input.requestId,
+        userId: input.identity?.userId
+      })
     });
 
     const status = operation === "create" ? 201 : 200;
@@ -238,8 +334,20 @@ function buildInsertSql(
 function buildUpdateSql(
   qualifiedTable: string,
   columns: string[],
-  pkColumn: string
+  pkColumn: string,
+  optimisticLock?: NonNullable<ResolvedApiContract["optimisticLocking"]>
 ): string {
   const setClauses = columns.map((col, i) => `${quoteIdentifier(col)} = :p${i + 1}`);
-  return `UPDATE ${qualifiedTable} SET ${setClauses.join(", ")} WHERE ${quoteIdentifier(pkColumn)} = :pkValue`;
+  const whereClauses = [`${quoteIdentifier(pkColumn)} = :pkValue`];
+
+  if (optimisticLock) {
+    if (optimisticLock.oracleType === "number") {
+      setClauses.push(`${quoteIdentifier(optimisticLock.dbColumn)} = ${quoteIdentifier(optimisticLock.dbColumn)} + 1`);
+    } else {
+      setClauses.push(`${quoteIdentifier(optimisticLock.dbColumn)} = CURRENT_TIMESTAMP`);
+    }
+    whereClauses.push(`${quoteIdentifier(optimisticLock.dbColumn)} = :lockValue`);
+  }
+
+  return `UPDATE ${qualifiedTable} SET ${setClauses.join(", ")} WHERE ${whereClauses.join(" AND ")}`;
 }
