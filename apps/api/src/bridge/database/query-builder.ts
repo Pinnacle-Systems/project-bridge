@@ -1,4 +1,4 @@
-import type { ResolvedApiContract } from "../contracts/index.js";
+import type { OraclePaginationStrategy, ResolvedApiContract } from "../contracts/index.js";
 
 export type QueryRequestFilter = {
   field: string;
@@ -23,6 +23,10 @@ export type QueryBuildResult = {
   binds: Record<string, any>;
 };
 
+export type QueryBuildOptions = {
+  paginationStrategy?: OraclePaginationStrategy;
+};
+
 const SUPPORTED_OPERATORS = ["eq", "in", "contains", "gte", "lte"] as const;
 
 export function quoteIdentifier(identifier: string): string {
@@ -32,7 +36,11 @@ export function quoteIdentifier(identifier: string): string {
   return `"${identifier}"`;
 }
 
-export function buildSelectQuery(contract: ResolvedApiContract, request: QueryRequest): QueryBuildResult {
+export function buildSelectQuery(
+  contract: ResolvedApiContract,
+  request: QueryRequest,
+  options: QueryBuildOptions = {}
+): QueryBuildResult {
   if (contract.source.type !== "table" && contract.source.type !== "view") {
     throw new Error("Query builder only supports table or view backed contracts.");
   }
@@ -43,7 +51,6 @@ export function buildSelectQuery(contract: ResolvedApiContract, request: QueryRe
   }
 
   const fieldMap = new Map(readableFields.map(f => [f.apiField, f]));
-  const allFieldMap = new Map(contract.fields.map(f => [f.apiField, f]));
 
   const selectCols = readableFields.map(f => quoteIdentifier(f.dbColumn!));
   
@@ -137,17 +144,45 @@ export function buildSelectQuery(contract: ResolvedApiContract, request: QueryRe
     sql += ` ORDER BY ${orderByClauses.join(", ")}`;
   }
 
-  // Pagination with offset/fetch (Oracle 12c+)
-  if (request.limit !== undefined) {
-    if (request.offset !== undefined) {
+  const limit = resolveLimit(contract, request);
+  if (limit !== undefined) {
+    const offset = resolveOffset(request);
+    const strategy = options.paginationStrategy ?? contract.pagination?.strategy ?? "offsetFetch";
+    binds.limit = limit;
+    binds.offset = offset;
+
+    if (strategy === "offsetFetch") {
       sql += ` OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY`;
-      binds.offset = request.offset;
-      binds.limit = request.limit;
     } else {
-      sql += ` FETCH FIRST :limit ROWS ONLY`;
-      binds.limit = request.limit;
+      sql = `SELECT * FROM ( SELECT a.*, ROWNUM rnum FROM (${sql}) a WHERE ROWNUM <= (:offset + :limit) ) WHERE rnum > :offset`;
     }
   }
 
   return { sql, binds };
+}
+
+function resolveLimit(contract: ResolvedApiContract, request: QueryRequest): number | undefined {
+  const requestedLimit = request.limit;
+  const defaultLimit = contract.pagination?.defaultLimit;
+  const maxLimit = contract.pagination?.maxLimit;
+  const limit = requestedLimit ?? defaultLimit;
+
+  if (limit === undefined) {
+    return undefined;
+  }
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw new Error("Pagination limit must be a positive integer.");
+  }
+  if (maxLimit !== undefined && limit > maxLimit) {
+    return maxLimit;
+  }
+  return limit;
+}
+
+function resolveOffset(request: QueryRequest): number {
+  const offset = request.offset ?? 0;
+  if (!Number.isInteger(offset) || offset < 0) {
+    throw new Error("Pagination offset must be a non-negative integer.");
+  }
+  return offset;
 }

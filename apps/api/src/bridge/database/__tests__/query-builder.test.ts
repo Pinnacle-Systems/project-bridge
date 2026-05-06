@@ -103,7 +103,7 @@ describe("Oracle Query Builder", () => {
     expect(result.sql).toContain("NAME");
   });
 
-  it("rejects unsupported operators.", () => {
+  it("7. rejects unsupported operators.", () => {
     const contract = getTestContract();
     expect(() =>
       buildSelectQuery(contract, {
@@ -112,7 +112,7 @@ describe("Oracle Query Builder", () => {
     ).toThrowError("Unsupported filter operator: unsupported");
   });
 
-  it("applies default sort if configured.", () => {
+  it("8. applies default sort if configured.", () => {
     const contract = getTestContract();
     contract.sorts = [{ field: "id", directions: ["desc"] }];
     const result = buildSelectQuery(contract, {});
@@ -120,7 +120,7 @@ describe("Oracle Query Builder", () => {
     expect(result.sql).toBe(`SELECT "ID", "NAME" FROM "MYSCHEMA"."USERS_TABLE" ORDER BY "ID" DESC`);
   });
 
-  it("adds pagination fetch and offset", () => {
+  it("9. adds pagination fetch and offset", () => {
     const contract = getTestContract();
     const result = buildSelectQuery(contract, { limit: 10, offset: 20 });
 
@@ -128,7 +128,80 @@ describe("Oracle Query Builder", () => {
     expect(result.binds).toEqual({ offset: 20, limit: 10 });
   });
 
-  it("rejects filters and sorts on write-only fields", () => {
+  it("10. generates offsetFetch pagination SQL for 19c", () => {
+    const contract = getTestContract();
+    contract.pagination = {
+      defaultLimit: 25,
+      maxLimit: 100,
+      strategy: "offsetFetch"
+    };
+
+    const result = buildSelectQuery(contract, { limit: 10, offset: 20 }, { paginationStrategy: "offsetFetch" });
+
+    expect(result.sql).toBe(`SELECT "ID", "NAME" FROM "MYSCHEMA"."USERS_TABLE" OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY`);
+    expect(result.binds).toEqual({ limit: 10, offset: 20 });
+  });
+
+  it("11. generates rownum pagination SQL for 11g", () => {
+    const contract = getTestContract();
+    contract.pagination = {
+      defaultLimit: 25,
+      maxLimit: 100,
+      strategy: "rownum"
+    };
+
+    const result = buildSelectQuery(contract, { limit: 10, offset: 20 }, { paginationStrategy: "rownum" });
+
+    expect(result.sql).toBe(
+      `SELECT * FROM ( SELECT a.*, ROWNUM rnum FROM (SELECT "ID", "NAME" FROM "MYSCHEMA"."USERS_TABLE") a WHERE ROWNUM <= (:offset + :limit) ) WHERE rnum > :offset`
+    );
+    expect(result.binds).toEqual({ limit: 10, offset: 20 });
+  });
+
+  it("12. clamps maxLimit instead of throwing", () => {
+    const contract = getTestContract();
+    contract.pagination = {
+      defaultLimit: 25,
+      maxLimit: 50,
+      strategy: "offsetFetch"
+    };
+
+    const result = buildSelectQuery(contract, { limit: 51 });
+    expect(result.binds.limit).toBe(50);
+  });
+
+  it("13. applies defaultLimit", () => {
+    const contract = getTestContract();
+    contract.pagination = {
+      defaultLimit: 25,
+      maxLimit: 100,
+      strategy: "offsetFetch"
+    };
+
+    const result = buildSelectQuery(contract, {});
+
+    expect(result.sql).toBe(`SELECT "ID", "NAME" FROM "MYSCHEMA"."USERS_TABLE" OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY`);
+    expect(result.binds).toEqual({ limit: 25, offset: 0 });
+  });
+
+  it("14. limit and offset use bind variables", () => {
+    const contract = getTestContract();
+    contract.pagination = {
+      defaultLimit: 25,
+      maxLimit: 100,
+      strategy: "offsetFetch"
+    };
+
+    const result = buildSelectQuery(contract, { limit: 10, offset: 5 });
+
+    expect(result.sql).toContain(":offset");
+    expect(result.sql).toContain(":limit");
+    expect(result.sql).not.toContain("OFFSET 5");
+    expect(result.sql).not.toContain("NEXT 10");
+    expect(result.binds).toEqual({ limit: 10, offset: 5 });
+  });
+
+  it("15. rejects filters and sorts on write-only fields", () => {
     const contract = getTestContract();
     
     expect(() =>
@@ -144,7 +217,7 @@ describe("Oracle Query Builder", () => {
     ).toThrowError("Unknown sort field: password");
   });
 
-  it("contains operator uses ESCAPE '\\'", () => {
+  it("16. contains operator uses ESCAPE '\\'", () => {
     const contract = getTestContract();
     const result = buildSelectQuery(contract, {
       filters: [{ field: "name", operator: "contains", value: "50% off_" }]
@@ -154,14 +227,14 @@ describe("Oracle Query Builder", () => {
     expect(result.binds).toEqual({ p1: "%50\\% off\\_%" });
   });
 
-  it("rejects identifiers with quotes or null bytes", () => {
+  it("17. rejects identifiers with quotes or null bytes", () => {
     const contract = getTestContract();
     contract.source.owner = 'HACK"SCHEMA';
     
     expect(() => buildSelectQuery(contract, {})).toThrowError("cannot contain double quotes");
   });
 
-  it("rejects invalid sort directions", () => {
+  it("18. rejects invalid sort directions", () => {
     const contract = getTestContract();
     
     expect(() =>
@@ -169,5 +242,28 @@ describe("Oracle Query Builder", () => {
         sorts: [{ field: "id", direction: "up" as any }]
       })
     ).toThrowError("Invalid sort direction: up");
+  });
+  it("19. pagination strategy precedence respects options over contract over default", () => {
+    const contract = getTestContract();
+    
+    // 1. Contract specifies "offsetFetch", option specifies "rownum" -> rownum
+    contract.pagination = { defaultLimit: 10, maxLimit: 100, strategy: "offsetFetch" };
+    let result = buildSelectQuery(contract, { limit: 5, offset: 0 }, { paginationStrategy: "rownum" });
+    expect(result.sql).toContain("ROWNUM <=");
+
+    // 2. Contract specifies "rownum", option specifies "offsetFetch" -> offsetFetch
+    contract.pagination = { defaultLimit: 10, maxLimit: 100, strategy: "rownum" };
+    result = buildSelectQuery(contract, { limit: 5, offset: 0 }, { paginationStrategy: "offsetFetch" });
+    expect(result.sql).toContain("OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY");
+
+    // 3. Contract specifies "rownum", option specifies nothing -> rownum
+    contract.pagination = { defaultLimit: 10, maxLimit: 100, strategy: "rownum" };
+    result = buildSelectQuery(contract, { limit: 5, offset: 0 });
+    expect(result.sql).toContain("ROWNUM <=");
+
+    // 4. Contract specifies nothing, option specifies nothing -> offsetFetch (default fallback)
+    contract.pagination = { defaultLimit: 10, maxLimit: 100 } as any;
+    result = buildSelectQuery(contract, { limit: 5, offset: 0 });
+    expect(result.sql).toContain("OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY");
   });
 });
