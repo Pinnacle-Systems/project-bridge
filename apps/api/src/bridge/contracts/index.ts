@@ -181,3 +181,4 @@ export type PublishedBridgeContract = ResolvedApiContract;
 export * from "./schema.js";
 export * from "./draft-contracts.js";
 export * from "./publish-contracts.js";
+export * from "./contract-cache.js";
