@@ -25,6 +25,13 @@ export type QueryBuildResult = {
 
 const SUPPORTED_OPERATORS = ["eq", "in", "contains", "gte", "lte"] as const;
 
+export function quoteIdentifier(identifier: string): string {
+  if (identifier.includes('"') || identifier.includes('\0')) {
+    throw new Error(`Invalid Oracle identifier: cannot contain double quotes or null bytes.`);
+  }
+  return `"${identifier}"`;
+}
+
 export function buildSelectQuery(contract: ResolvedApiContract, request: QueryRequest): QueryBuildResult {
   if (contract.source.type !== "table" && contract.source.type !== "view") {
     throw new Error("Query builder only supports table or view backed contracts.");
@@ -38,7 +45,7 @@ export function buildSelectQuery(contract: ResolvedApiContract, request: QueryRe
   const fieldMap = new Map(readableFields.map(f => [f.apiField, f]));
   const allFieldMap = new Map(contract.fields.map(f => [f.apiField, f]));
 
-  const selectCols = readableFields.map(f => `"${f.dbColumn}"`);
+  const selectCols = readableFields.map(f => quoteIdentifier(f.dbColumn!));
   
   const owner = contract.source.owner;
   const name = contract.source.name;
@@ -46,7 +53,7 @@ export function buildSelectQuery(contract: ResolvedApiContract, request: QueryRe
     throw new Error("Source name is required for tables and views.");
   }
 
-  const fromClause = `"${owner}"."${name}"`;
+  const fromClause = `${quoteIdentifier(owner)}.${quoteIdentifier(name)}`;
   
   const binds: Record<string, any> = {};
   const whereClauses: string[] = [];
@@ -54,11 +61,11 @@ export function buildSelectQuery(contract: ResolvedApiContract, request: QueryRe
 
   if (request.filters) {
     for (const filter of request.filters) {
-      if (!allFieldMap.has(filter.field)) {
+      if (!fieldMap.has(filter.field)) {
         throw new Error(`Unknown filter field: ${filter.field}`);
       }
       
-      const dbCol = allFieldMap.get(filter.field)!.dbColumn!;
+      const dbCol = fieldMap.get(filter.field)!.dbColumn!;
 
       if (!SUPPORTED_OPERATORS.includes(filter.operator as any)) {
         throw new Error(`Unsupported filter operator: ${filter.operator}`);
@@ -68,7 +75,7 @@ export function buildSelectQuery(contract: ResolvedApiContract, request: QueryRe
 
       switch (filter.operator) {
         case "eq":
-          whereClauses.push(`"${dbCol}" = :${bindKey}`);
+          whereClauses.push(`${quoteIdentifier(dbCol)} = :${bindKey}`);
           binds[bindKey] = filter.value;
           break;
         case "in":
@@ -80,19 +87,18 @@ export function buildSelectQuery(contract: ResolvedApiContract, request: QueryRe
             binds[k] = v;
             return `:${k}`;
           });
-          whereClauses.push(`"${dbCol}" IN (${inKeys.join(", ")})`);
+          whereClauses.push(`${quoteIdentifier(dbCol)} IN (${inKeys.join(", ")})`);
           break;
         case "contains":
-          whereClauses.push(`"${dbCol}" LIKE :${bindKey}`);
+          whereClauses.push(`${quoteIdentifier(dbCol)} LIKE :${bindKey} ESCAPE '\\'`);
           binds[bindKey] = `%${String(filter.value).replace(/[%_]/g, "\\$&")}%`;
-          // We could add ESCAPE '\' if we wanted strictly safe contains, but MVP might be fine.
           break;
         case "gte":
-          whereClauses.push(`"${dbCol}" >= :${bindKey}`);
+          whereClauses.push(`${quoteIdentifier(dbCol)} >= :${bindKey}`);
           binds[bindKey] = filter.value;
           break;
         case "lte":
-          whereClauses.push(`"${dbCol}" <= :${bindKey}`);
+          whereClauses.push(`${quoteIdentifier(dbCol)} <= :${bindKey}`);
           binds[bindKey] = filter.value;
           break;
       }
@@ -112,11 +118,14 @@ export function buildSelectQuery(contract: ResolvedApiContract, request: QueryRe
   const orderByClauses: string[] = [];
   if (sorts) {
     for (const sort of sorts) {
-      if (!allFieldMap.has(sort.field)) {
+      if (!fieldMap.has(sort.field)) {
         throw new Error(`Unknown sort field: ${sort.field}`);
       }
-      const dbCol = allFieldMap.get(sort.field)!.dbColumn!;
-      orderByClauses.push(`"${dbCol}" ${sort.direction === "desc" ? "DESC" : "ASC"}`);
+      if (sort.direction !== "asc" && sort.direction !== "desc") {
+        throw new Error(`Invalid sort direction: ${sort.direction}. Must be 'asc' or 'desc'.`);
+      }
+      const dbCol = fieldMap.get(sort.field)!.dbColumn!;
+      orderByClauses.push(`${quoteIdentifier(dbCol)} ${sort.direction === "desc" ? "DESC" : "ASC"}`);
     }
   }
 

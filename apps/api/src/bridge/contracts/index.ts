@@ -157,6 +157,8 @@ export type DraftApiContract = {
   errorMappings?: ErrorMapping[];
 };
 
+export const SCHEMA_VERSION = "1" as const;
+
 export type RuntimeContractMetadata = {
   loadedAt?: Date;
   cacheKey: string;

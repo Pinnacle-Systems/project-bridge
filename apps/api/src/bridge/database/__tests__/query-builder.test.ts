@@ -127,4 +127,47 @@ describe("Oracle Query Builder", () => {
     expect(result.sql).toBe(`SELECT "ID", "NAME" FROM "MYSCHEMA"."USERS_TABLE" OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY`);
     expect(result.binds).toEqual({ offset: 20, limit: 10 });
   });
+
+  it("rejects filters and sorts on write-only fields", () => {
+    const contract = getTestContract();
+    
+    expect(() =>
+      buildSelectQuery(contract, {
+        filters: [{ field: "password", operator: "eq", value: "secret" }]
+      })
+    ).toThrowError("Unknown filter field: password");
+
+    expect(() =>
+      buildSelectQuery(contract, {
+        sorts: [{ field: "password", direction: "asc" }]
+      })
+    ).toThrowError("Unknown sort field: password");
+  });
+
+  it("contains operator uses ESCAPE '\\'", () => {
+    const contract = getTestContract();
+    const result = buildSelectQuery(contract, {
+      filters: [{ field: "name", operator: "contains", value: "50% off_" }]
+    });
+
+    expect(result.sql).toContain(`"NAME" LIKE :p1 ESCAPE '\\'`);
+    expect(result.binds).toEqual({ p1: "%50\\% off\\_%" });
+  });
+
+  it("rejects identifiers with quotes or null bytes", () => {
+    const contract = getTestContract();
+    contract.source.owner = 'HACK"SCHEMA';
+    
+    expect(() => buildSelectQuery(contract, {})).toThrowError("cannot contain double quotes");
+  });
+
+  it("rejects invalid sort directions", () => {
+    const contract = getTestContract();
+    
+    expect(() =>
+      buildSelectQuery(contract, {
+        sorts: [{ field: "id", direction: "up" as any }]
+      })
+    ).toThrowError("Invalid sort direction: up");
+  });
 });

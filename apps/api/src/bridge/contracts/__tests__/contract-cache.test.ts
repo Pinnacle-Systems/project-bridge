@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createContractCache, type ContractCacheStore, type StoredPublishedContractForCache } from "../contract-cache.js";
-import type { ResolvedApiContract } from "../index.js";
+import { SCHEMA_VERSION, type ResolvedApiContract } from "../index.js";
 
 function validResolvedContractData(overrides: Partial<ResolvedApiContract> = {}): ResolvedApiContract {
   return {
@@ -35,7 +35,7 @@ function validResolvedContractData(overrides: Partial<ResolvedApiContract> = {})
     },
     runtime: {
       cacheKey: "employees_v1",
-      schemaVersion: "1.0.0"
+      schemaVersion: SCHEMA_VERSION
     },
     ...overrides
   };
@@ -121,7 +121,25 @@ describe("ContractCache", () => {
     );
   });
 
-  it("4. getContractByEndpoint returns correct contract.", async () => {
+
+
+  it("4. Unsupported schemaVersion is skipped.", async () => {
+    const contractData = validResolvedContractData({ runtime: { cacheKey: "employees_v1", schemaVersion: "999" } });
+    const store = createMemoryStore([
+      { id: "1", endpointPath: "/api/hr/employees", status: "active", contractData }
+    ]);
+
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const cache = createContractCache(store, logger);
+    await cache.loadActiveContracts();
+
+    expect(cache.getContractByEndpoint("GET", "/api/hr/employees")).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("unsupported schema version 999")
+    );
+  });
+
+  it("5. getContractByEndpoint returns correct contract.", async () => {
     const data1 = validResolvedContractData({ endpoint: "/api/hr/e1", id: "c1" });
     const data2 = validResolvedContractData({ endpoint: "/api/hr/e2", id: "c2" });
     const store = createMemoryStore([
@@ -137,7 +155,7 @@ describe("ContractCache", () => {
     expect(cache.getContractByEndpoint("GET", "/api/hr/e3")).toBeUndefined();
   });
 
-  it("5. Failed reload keeps previous cache.", async () => {
+  it("6. Failed reload keeps previous cache.", async () => {
     const data1 = validResolvedContractData({ endpoint: "/api/hr/e1", id: "c1" });
     const store = createMemoryStore([
       { id: "1", endpointPath: "/api/hr/e1", status: "active", contractData: data1 }
@@ -161,5 +179,56 @@ describe("ContractCache", () => {
       "Failed to reload all contracts. Keeping previous cache.",
       expect.any(Error)
     );
+  });
+
+  it("7. reloadContract clears stale endpoint keys if endpoint changed.", async () => {
+    const data = validResolvedContractData({ endpoint: "/api/hr/old", id: "1" });
+    const store = createMemoryStore([
+      { id: "1", endpointPath: "/api/hr/old", status: "active", contractData: data }
+    ]);
+
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const cache = createContractCache(store, logger);
+    await cache.loadActiveContracts();
+    
+    expect(cache.getContractByEndpoint("GET", "/api/hr/old")).toBeDefined();
+
+    // Now update the database mock with new endpoint
+    const newData = validResolvedContractData({ endpoint: "/api/hr/new", id: "1" });
+    store.publishedContract.findUnique = async () => ({
+      id: "1", endpointPath: "/api/hr/new", status: "active", contractData: newData
+    });
+
+    await cache.reloadContract("1");
+
+    // Old endpoint should be gone, new one should be present
+    expect(cache.getContractByEndpoint("GET", "/api/hr/old")).toBeUndefined();
+    expect(cache.getContractByEndpoint("GET", "/api/hr/new")).toBeDefined();
+
+    // Now set to inactive and verify cleanup
+    store.publishedContract.findUnique = async () => ({
+      id: "1", endpointPath: "/api/hr/new", status: "retired", contractData: newData
+    });
+
+    await cache.reloadContract("1");
+    expect(cache.getContractByEndpoint("GET", "/api/hr/new")).toBeUndefined();
+  });
+
+  it("8. methods are correctly mapped and retrieved.", async () => {
+    const data = validResolvedContractData({ endpoint: "/api/hr/multi", id: "1" });
+    data.operations = [
+      { operation: "read", enabled: true },
+      { operation: "create", enabled: true }
+    ];
+    const store = createMemoryStore([
+      { id: "1", endpointPath: "/api/hr/multi", status: "active", contractData: data }
+    ]);
+
+    const cache = createContractCache(store);
+    await cache.loadActiveContracts();
+    
+    expect(cache.getContractByEndpoint("GET", "/api/hr/multi")).toBeDefined();
+    expect(cache.getContractByEndpoint("POST", "/api/hr/multi")).toBeDefined();
+    expect(cache.getContractByEndpoint("PUT", "/api/hr/multi")).toBeUndefined();
   });
 });

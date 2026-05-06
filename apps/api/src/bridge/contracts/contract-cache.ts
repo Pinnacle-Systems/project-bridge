@@ -1,4 +1,5 @@
 import {
+  SCHEMA_VERSION,
   validateResolvedApiContract,
   type ResolvedApiContract
 } from "./index.js";
@@ -37,10 +38,31 @@ export function createContractCache(store: ContractCacheStore, logger: CacheLogg
   let contractsMap = new Map<string, ResolvedApiContract>();
 
   const buildCacheKey = (method: string, endpointPath: string) => {
-    // For now, endpointPath is enough, assuming method mapping or using just path.
-    // We can include method if needed later, but the requirements just say "getContractByEndpoint(method/path)"
-    // Let's use endpointPath for simplicity as contracts seem to be defined by endpointPath
-    return endpointPath.toLowerCase();
+    return `${method.toUpperCase()}:${endpointPath.toLowerCase()}`;
+  };
+
+  const getHttpMethodsForContract = (contract: ResolvedApiContract): string[] => {
+    const methods = new Set<string>();
+    for (const op of contract.operations) {
+      if (!op.enabled) continue;
+      switch (op.operation) {
+        case "read":
+        case "list":
+          methods.add("GET");
+          break;
+        case "create":
+          methods.add("POST");
+          break;
+        case "update":
+          methods.add("PUT");
+          methods.add("PATCH");
+          break;
+        case "delete":
+          methods.add("DELETE");
+          break;
+      }
+    }
+    return Array.from(methods);
   };
 
   return {
@@ -54,8 +76,15 @@ export function createContractCache(store: ContractCacheStore, logger: CacheLogg
       for (const contract of activeContracts) {
         const validation = validateResolvedApiContract(contract.contractData);
         if (validation.success) {
-          const key = buildCacheKey("GET", contract.endpointPath); // Method is placeholder for now unless specified
-          newMap.set(key, validation.data);
+          if (validation.data.runtime.schemaVersion !== SCHEMA_VERSION) {
+            logger.warn(`Contract ${contract.id} uses unsupported schema version ${validation.data.runtime.schemaVersion}. Skipping.`);
+            continue;
+          }
+          const methods = getHttpMethodsForContract(validation.data);
+          for (const method of methods) {
+            const key = buildCacheKey(method, contract.endpointPath);
+            newMap.set(key, validation.data);
+          }
         } else {
           logger.warn(
             `Failed to validate contract schema for active contract ${contract.id}:`,
@@ -77,20 +106,37 @@ export function createContractCache(store: ContractCacheStore, logger: CacheLogg
         where: { id: contractId }
       });
 
-      if (!contract) {
-        logger.warn(`Contract ${contractId} not found during reload.`);
-        return;
-      }
-
-      if (contract.status !== "active") {
-        logger.warn(`Contract ${contractId} is not active. Ignoring.`);
+      if (!contract || contract.status !== "active") {
+        let removed = false;
+        for (const [existingKey, existingContract] of contractsMap.entries()) {
+          if (existingContract.id === contractId) {
+            contractsMap.delete(existingKey);
+            removed = true;
+          }
+        }
+        logger.warn(`Contract ${contractId} is not active or not found.${removed ? ' Removed from cache.' : ''} Ignoring.`);
         return;
       }
 
       const validation = validateResolvedApiContract(contract.contractData);
       if (validation.success) {
-        const key = buildCacheKey("GET", contract.endpointPath);
-        contractsMap.set(key, validation.data);
+        if (validation.data.runtime.schemaVersion !== SCHEMA_VERSION) {
+          logger.warn(`Contract ${contractId} uses unsupported schema version ${validation.data.runtime.schemaVersion}. Skipping.`);
+          return;
+        }
+
+        // Remove all old keys for this contract ID (endpoint or operations might have changed)
+        for (const [existingKey, existingContract] of contractsMap.entries()) {
+          if (existingContract.id === contractId) {
+            contractsMap.delete(existingKey);
+          }
+        }
+        
+        const methods = getHttpMethodsForContract(validation.data);
+        for (const method of methods) {
+          const key = buildCacheKey(method, contract.endpointPath);
+          contractsMap.set(key, validation.data);
+        }
       } else {
         logger.warn(
           `Failed to validate contract schema during reload for contract ${contract.id}:`,

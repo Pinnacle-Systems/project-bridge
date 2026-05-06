@@ -1,4 +1,5 @@
 import {
+  SCHEMA_VERSION,
   validateResolvedApiContract,
   type ApiFieldMapping,
   type DraftApiContract,
@@ -128,7 +129,7 @@ export function createOracleAwareContractCompiler(store: ContractCompilerStore):
         },
         runtime: {
           cacheKey: `${input.draft.endpoint}:v${input.version ?? 1}`,
-          schemaVersion: "1"
+          schemaVersion: SCHEMA_VERSION
         }
       };
 
