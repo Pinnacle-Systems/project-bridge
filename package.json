@@ -1,0 +1,11 @@
+{
+  "name": "project-bridge",
+  "private": true,
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "test": "pnpm --filter @project-bridge/api test"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}

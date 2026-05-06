@@ -1,0 +1,178 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model ApiConnection {
+  id              String                 @id @default(uuid()) @db.Uuid
+  name            String                 @db.VarChar(100)
+  connectionType  String                 @map("connection_type") @db.VarChar(30)
+  host            String?                @db.VarChar(255)
+  port            Int?
+  serviceName     String?                @map("service_name") @db.VarChar(255)
+  sid             String?                @db.VarChar(100)
+  tnsAlias        String?                @map("tns_alias") @db.VarChar(255)
+  username        String                 @db.VarChar(255)
+  encryptedPassword String?              @map("encrypted_password") @db.Text
+  passwordSecretRef String?              @map("password_secret_ref") @db.VarChar(500)
+  walletPath      String?                @map("wallet_path") @db.VarChar(500)
+  walletSecretRef String?                @map("wallet_secret_ref") @db.VarChar(500)
+  defaultOwner    String?                @map("default_owner") @db.VarChar(100)
+  oracleVersion   String?                @map("oracle_version") @db.VarChar(50)
+  paginationStrategy String?             @map("pagination_strategy") @db.VarChar(30)
+  status          String                 @default("unverified") @db.VarChar(30)
+  createdAt       DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)
+  schemaSnapshots OracleSchemaSnapshot[]
+  contractDrafts  ApiContractDraft[]
+
+  @@index([connectionType])
+  @@index([defaultOwner])
+  @@index([status])
+  @@map("api_connections")
+}
+
+model OracleSchemaSnapshot {
+  id              String        @id @default(uuid()) @db.Uuid
+  apiConnectionId String        @map("api_connection_id") @db.Uuid
+  oracleOwner     String        @map("oracle_owner") @db.VarChar(100)
+  snapshotData    Json          @map("snapshot_data") @db.JsonB
+  capturedAt      DateTime      @default(now()) @map("captured_at") @db.Timestamptz(6)
+  capturedBy      String?       @map("captured_by") @db.VarChar(100)
+  apiConnection   ApiConnection @relation(fields: [apiConnectionId], references: [id], onDelete: Cascade)
+
+  @@index([apiConnectionId])
+  @@index([oracleOwner])
+  @@map("oracle_schema_snapshots")
+}
+
+model ApiContractDraft {
+  id              String               @id @default(uuid()) @db.Uuid
+  apiConnectionId String               @map("api_connection_id") @db.Uuid
+  resourceName    String               @map("resource_name") @db.VarChar(100)
+  endpointPath    String               @map("endpoint_path") @db.VarChar(255)
+  draftData       Json                 @map("draft_data") @db.JsonB
+  status          String               @default("draft") @db.VarChar(30)
+  createdBy       String?              @map("created_by") @db.VarChar(100)
+  updatedBy       String?              @map("updated_by") @db.VarChar(100)
+  createdAt       DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+  apiConnection   ApiConnection        @relation(fields: [apiConnectionId], references: [id], onDelete: Restrict)
+  versions        ApiContractVersion[]
+  diagnostics     CompilerDiagnostic[]
+
+  @@index([apiConnectionId])
+  @@index([status])
+  @@index([endpointPath])
+  @@map("api_contract_drafts")
+}
+
+model PublishedContract {
+  id               String                   @id @default(uuid()) @db.Uuid
+  resourceName     String                   @map("resource_name") @db.VarChar(100)
+  version          Int
+  endpointPath     String                   @map("endpoint_path") @db.VarChar(255)
+  contractData     Json                     @map("contract_data") @db.JsonB
+  oracleOwner      String?                  @map("oracle_owner") @db.VarChar(100)
+  oracleObjectName String?                  @map("oracle_object_name") @db.VarChar(100)
+  oracleObjectType String?                  @map("oracle_object_type") @db.VarChar(50)
+  status           String                   @db.VarChar(30)
+  publishedAt      DateTime                 @map("published_at") @db.Timestamptz(6)
+  publishedBy      String?                  @map("published_by") @db.VarChar(100)
+  createdAt        DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+  versions         ApiContractVersion[]
+  publishHistory   ContractPublishHistory[]
+  driftReports     SchemaDriftReport[]
+
+  @@unique([resourceName, version])
+  @@unique([endpointPath, version])
+  @@index([status])
+  @@index([endpointPath])
+  @@index([oracleOwner, oracleObjectName])
+  @@index([contractData], type: Gin, map: "published_contracts_contract_data_gin_idx")
+  @@map("published_contracts")
+}
+
+model ApiContractVersion {
+  id                  String             @id @default(uuid()) @db.Uuid
+  apiContractDraftId  String             @map("api_contract_draft_id") @db.Uuid
+  publishedContractId String?            @map("published_contract_id") @db.Uuid
+  version             Int
+  versionData         Json               @map("version_data") @db.JsonB
+  createdAt           DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdBy           String?            @map("created_by") @db.VarChar(100)
+  draft               ApiContractDraft   @relation(fields: [apiContractDraftId], references: [id], onDelete: Cascade)
+  publishedContract   PublishedContract? @relation(fields: [publishedContractId], references: [id], onDelete: SetNull)
+
+  @@index([apiContractDraftId])
+  @@index([publishedContractId])
+  @@unique([apiContractDraftId, version])
+  @@map("api_contract_versions")
+}
+
+model ContractPublishHistory {
+  id                  String            @id @default(uuid()) @db.Uuid
+  publishedContractId String            @map("published_contract_id") @db.Uuid
+  action              String            @db.VarChar(30)
+  actor               String?           @db.VarChar(100)
+  notes               String?
+  createdAt           DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  publishedContract   PublishedContract @relation(fields: [publishedContractId], references: [id], onDelete: Cascade)
+
+  @@index([publishedContractId])
+  @@index([action])
+  @@map("contract_publish_history")
+}
+
+model CompilerDiagnostic {
+  id                 String           @id @default(uuid()) @db.Uuid
+  apiContractDraftId String           @map("api_contract_draft_id") @db.Uuid
+  code               String           @db.VarChar(100)
+  severity           String           @db.VarChar(30)
+  message            String
+  detail             Json?            @db.JsonB
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  draft              ApiContractDraft @relation(fields: [apiContractDraftId], references: [id], onDelete: Cascade)
+
+  @@index([apiContractDraftId])
+  @@index([severity])
+  @@map("compiler_diagnostics")
+}
+
+model ApiAuditLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  eventType    String   @map("event_type") @db.VarChar(100)
+  actor        String?  @db.VarChar(100)
+  requestId    String?  @map("request_id") @db.VarChar(100)
+  resourceName String?  @map("resource_name") @db.VarChar(100)
+  endpointPath String?  @map("endpoint_path") @db.VarChar(255)
+  metadata     Json?    @db.JsonB
+  occurredAt   DateTime @default(now()) @map("occurred_at") @db.Timestamptz(6)
+
+  @@index([eventType])
+  @@index([requestId])
+  @@index([resourceName])
+  @@index([occurredAt])
+  @@map("api_audit_logs")
+}
+
+model SchemaDriftReport {
+  id                  String             @id @default(uuid()) @db.Uuid
+  publishedContractId String             @map("published_contract_id") @db.Uuid
+  severity            String             @db.VarChar(30)
+  status              String             @default("open") @db.VarChar(30)
+  reportData          Json               @map("report_data") @db.JsonB
+  checkedAt           DateTime           @default(now()) @map("checked_at") @db.Timestamptz(6)
+  resolvedAt          DateTime?          @map("resolved_at") @db.Timestamptz(6)
+  publishedContract   PublishedContract  @relation(fields: [publishedContractId], references: [id], onDelete: Cascade)
+
+  @@index([publishedContractId])
+  @@index([severity])
+  @@index([status])
+  @@index([checkedAt])
+  @@map("schema_drift_reports")
+}
