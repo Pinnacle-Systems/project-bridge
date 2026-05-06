@@ -4,6 +4,7 @@ import type { ApiFieldMapping, OraclePaginationStrategy } from "../contracts/ind
 import type { AuditEvent } from "../audit/index.js";
 import type { PermissionChecker, RequestIdentity } from "./permissions.js";
 import { buildSelectQuery, type QueryRequestFilter, type QueryRequestSort } from "../database/query-builder.js";
+import { transformReadValue } from "../transformers/engine.js";
 
 export type AuditLogger = {
   log(event: Omit<AuditEvent, "id" | "occurredAt">): void;
@@ -76,7 +77,7 @@ export function createReadHandler(ctx: ReadHandlerContext) {
     // Step 7: Execute against Oracle
     let rows: Record<string, unknown>[];
     try {
-      const result = await ctx.adapter.query<Record<string, unknown>>(sql, binds, { outFormat: "object" });
+      const result = await ctx.adapter.query<Record<string, unknown>>(sql, binds as any, { outFormat: "object" });
       rows = result.rows;
     } catch (err) {
       ctx.audit?.log({
@@ -122,25 +123,7 @@ function mapRow(
   const result: Record<string, unknown> = {};
   for (const field of fields) {
     if (allowedApiFields && !allowedApiFields.includes(field.apiField)) continue;
-    result[field.apiField] = applyTransformers(row[field.dbColumn!], field);
-  }
-  return result;
-}
-
-function applyTransformers(value: unknown, field: ApiFieldMapping): unknown {
-  if (!field.transformers?.length) return value;
-  let result = value;
-  for (const transformer of field.transformers) {
-    switch (transformer.kind) {
-      case "booleanMapping":
-        result = result === transformer.trueValue ? true
-               : result === transformer.falseValue ? false
-               : null;
-        break;
-      case "trimRight":
-        if (typeof result === "string") result = result.trimEnd();
-        break;
-    }
+    result[field.apiField] = transformReadValue(row[field.dbColumn!], field);
   }
   return result;
 }

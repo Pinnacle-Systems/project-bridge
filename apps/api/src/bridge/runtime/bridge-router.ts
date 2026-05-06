@@ -32,7 +32,7 @@ export function createBridgeRouter(ctx: ReadHandlerContext): Router {
   router.get("/:resource/:id", async (req: Request, res: Response) => {
     const { status, body } = await handle({
       contractPath: `/${req.params.resource}`,
-      idParam: req.params.id,
+      idParam: req.params.id as string,
       identity: (req as any).identity
     });
     res.status(status).json(body);
