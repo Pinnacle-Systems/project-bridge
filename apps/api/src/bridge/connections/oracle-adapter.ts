@@ -49,16 +49,22 @@ export type DriverExecuteResult<Row = unknown> = {
   outBinds?: unknown;
 };
 
+export type DriverExecuteOptions = Omit<ExecuteOptions, "outFormat"> & {
+  outFormat?: number;
+};
+
 export type OracleDriverConnection = {
   execute(
     sql: string,
     binds: BindParameters,
-    options?: ExecuteOptions
+    options?: DriverExecuteOptions
   ): Promise<DriverExecuteResult>;
   close(): Promise<void>;
 };
 
 export type OracleDriver = {
+  OUT_FORMAT_ARRAY?: number;
+  OUT_FORMAT_OBJECT?: number;
   getConnection(config: OracleAdapterConnectionConfig): Promise<OracleDriverConnection>;
 };
 
@@ -128,7 +134,7 @@ export function createOracleConnectorAdapter(driver: OracleDriver): OracleConnec
       assertSqlText(sql, "query");
       assertBindParameters(binds);
       const connection = await getActiveConnection();
-      const result = await connection.execute(sql, binds, options);
+      const result = await connection.execute(sql, binds, mapExecuteOptions(options, driver));
       return {
         rows: (result.rows ?? []) as Row[],
         metaData: result.metaData
@@ -139,7 +145,7 @@ export function createOracleConnectorAdapter(driver: OracleDriver): OracleConnec
       assertSqlText(sqlOrPlsql, "execute");
       assertBindParameters(binds);
       const connection = await getActiveConnection();
-      const result = await connection.execute(sqlOrPlsql, binds, options);
+      const result = await connection.execute(sqlOrPlsql, binds, mapExecuteOptions(options, driver));
       return {
         rows: (result.rows ?? []) as Row[],
         metaData: result.metaData,
@@ -167,6 +173,22 @@ export function createOracleConnectorAdapter(driver: OracleDriver): OracleConnec
       const placeholders = Object.keys(binds).map((name) => `${name} => :${name}`).join(", ");
       return this.executePlsqlBlock<Row>(`BEGIN ${procedureName}(${placeholders}); END;`, binds, options);
     }
+  };
+}
+
+function mapExecuteOptions(options: ExecuteOptions | undefined, driver: OracleDriver): DriverExecuteOptions | undefined {
+  if (!options?.outFormat) {
+    return options as DriverExecuteOptions | undefined;
+  }
+
+  const outFormat =
+    options.outFormat === "object"
+      ? driver.OUT_FORMAT_OBJECT ?? 4002
+      : driver.OUT_FORMAT_ARRAY ?? 4001;
+
+  return {
+    ...options,
+    outFormat
   };
 }
 

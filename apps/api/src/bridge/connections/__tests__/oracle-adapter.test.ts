@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createOracleConnectorAdapter,
   type BindParameters,
+  type DriverExecuteOptions,
   type DriverExecuteResult,
-  type ExecuteOptions,
   type OracleAdapterConnectionConfig,
   type OracleDriver,
   type OracleDriverConnection
@@ -14,7 +14,7 @@ function createMockDriver() {
   const execute = vi.fn(async (
     sql: string,
     binds: BindParameters,
-    _options?: ExecuteOptions
+    _options?: DriverExecuteOptions
   ): Promise<DriverExecuteResult> => ({
       rows: sql.startsWith("SELECT") ? [{ ok: 1 }] : [],
       rowsAffected: sql.startsWith("UPDATE") ? 1 : undefined,
@@ -23,7 +23,11 @@ function createMockDriver() {
   const close = vi.fn(async () => undefined);
   const connection = { execute, close } satisfies OracleDriverConnection;
   const getConnection = vi.fn(async (_config: OracleAdapterConnectionConfig) => connection);
-  const driver = { getConnection } satisfies OracleDriver;
+  const driver = {
+    OUT_FORMAT_ARRAY: 4001,
+    OUT_FORMAT_OBJECT: 4002,
+    getConnection
+  } satisfies OracleDriver;
 
   return { driver, connection, execute, close, getConnection };
 }
@@ -101,6 +105,16 @@ describe("Oracle connector adapter", () => {
     expect(ok).toBe(true);
     expect(execute).toHaveBeenCalledWith("SELECT 1 FROM DUAL", {}, {});
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps readable outFormat options to node-oracledb constants", async () => {
+    const { driver, execute } = createMockDriver();
+    const adapter = createOracleConnectorAdapter(driver);
+
+    await adapter.openConnection({ user: "erp_api", connectString: "ERPDB" });
+    await adapter.query("SELECT * FROM EMPLOYEE_MASTER", {}, { outFormat: "object" });
+
+    expect(execute).toHaveBeenCalledWith("SELECT * FROM EMPLOYEE_MASTER", {}, { outFormat: 4002 });
   });
 
   it("closes an existing connection before opening another one", async () => {

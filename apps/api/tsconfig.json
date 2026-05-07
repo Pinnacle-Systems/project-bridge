@@ -8,8 +8,8 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "outDir": "dist",
-    "rootDir": "src",
+    "rootDir": ".",
     "types": ["node", "vitest"]
   },
-  "include": ["src/**/*.ts"]
+  "include": ["prisma.config.ts", "scripts/**/*.ts", "src/**/*.ts", "types/**/*.d.ts"]
 }
