@@ -111,7 +111,7 @@ export function createRuntimeRouter(ctx: RuntimeDispatchContext): Router {
   const router = Router();
   const dispatch = createRuntimeDispatcher(ctx);
 
-  router.all("*", async (req: Request, res: Response) => {
+  router.use(async (req: Request, res: Response) => {
     const filters = parseFilters(req.query);
     const limit   = req.query.limit  !== undefined ? Number(req.query.limit)  : undefined;
     const offset  = req.query.offset !== undefined ? Number(req.query.offset) : undefined;

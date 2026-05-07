@@ -22,7 +22,6 @@ function safeConnection(id = "conn-1"): OracleConnectionSafe {
     sid: null,
     tnsAlias: null,
     username: "HR",
-    walletSecretRef: null,
     defaultOwner: "HR",
     oracleVersion: null,
     paginationStrategy: null,
@@ -197,6 +196,27 @@ describe("Admin flows", () => {
     expect(result.status).toBe(201);
     expect((result.body as any).data.id).toBe("conn-1");
     expect(ctx.connections.createConnection).toHaveBeenCalledOnce();
+  });
+
+  it("1b. POST /bridge/connections rejects a missing body with details", async () => {
+    const ctx = makeCtx();
+    const h = createAdminHandlers(ctx);
+    const result = await h.createConnection(undefined);
+
+    expect(result.status).toBe(400);
+    expect(result.body).toEqual({
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Request body must be a JSON object.",
+        details: [
+          {
+            field: "body",
+            message: "Send a JSON object with name, connectionType, and username."
+          }
+        ]
+      }
+    });
+    expect(ctx.connections.createConnection).not.toHaveBeenCalled();
   });
 
   // Test 2

@@ -1,5 +1,5 @@
 import type { BridgeHttpContext } from "./context.js";
-import type { CreateOracleConnectionInput, UpdateOracleConnectionInput } from "../connections/index.js";
+import type { CreateOracleConnectionInput } from "../connections/index.js";
 import type { DraftApiContract } from "../contracts/index.js";
 
 export type AdminHandlerOutput = { status: number; body: unknown };
@@ -42,7 +42,12 @@ export function createAdminHandlers(ctx: BridgeHttpContext): AdminHandlers {
     // ── Connections ──────────────────────────────────────────────────────────
 
     async createConnection(body) {
-      const connection = await ctx.connections.createConnection(body as CreateOracleConnectionInput);
+      const validation = validateCreateConnectionBody(body);
+      if (!validation.ok) {
+        return validation.output;
+      }
+
+      const connection = await ctx.connections.createConnection(validation.input);
       return { status: 201, body: { data: connection } };
     },
 
@@ -211,11 +216,80 @@ export function createAdminHandlers(ctx: BridgeHttpContext): AdminHandlers {
     async getAuditLogs(query) {
       const take = query?.take ? parseInt(query.take, 10) : 100;
       const logs = await ctx.store.auditLog.findMany({
-        where: query?.type ? { type: query.type } : undefined,
+        where: query?.type ? { eventType: query.type } : undefined,
         orderBy: { occurredAt: "desc" },
         take
       });
       return { status: 200, body: { data: logs } };
     }
   };
+}
+
+type ValidationResult<T> =
+  | { ok: true; input: T }
+  | { ok: false; output: AdminHandlerOutput };
+
+function validateCreateConnectionBody(body: unknown): ValidationResult<CreateOracleConnectionInput> {
+  if (!isRecord(body)) {
+    return invalidRequest("Request body must be a JSON object.", [
+      { field: "body", message: "Send a JSON object with name, connectionType, and username." }
+    ]);
+  }
+
+  const details: Array<{ field: string; message: string }> = [];
+  requireStringField(body, "name", details);
+  requireStringField(body, "connectionType", details);
+  requireStringField(body, "username", details);
+
+  if (typeof body.connectionType === "string" && !isConnectionType(body.connectionType)) {
+    details.push({
+      field: "connectionType",
+      message: "Must be one of: serviceName, sid, tnsAlias, wallet."
+    });
+  }
+
+  const port = body.port;
+  if (port !== undefined && (typeof port !== "number" || !Number.isInteger(port) || port <= 0)) {
+    details.push({ field: "port", message: "Must be a positive integer when provided." });
+  }
+
+  if (details.length > 0) {
+    return invalidRequest("Connection request is invalid.", details);
+  }
+
+  return { ok: true, input: body as CreateOracleConnectionInput };
+}
+
+function invalidRequest(message: string, details: Array<{ field: string; message: string }>): ValidationResult<never> {
+  return {
+    ok: false,
+    output: {
+      status: 400,
+      body: {
+        error: {
+          code: "INVALID_REQUEST",
+          message,
+          details
+        }
+      }
+    }
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function requireStringField(
+  body: Record<string, unknown>,
+  field: string,
+  details: Array<{ field: string; message: string }>
+): void {
+  if (typeof body[field] !== "string" || body[field].trim() === "") {
+    details.push({ field, message: "Required string field is missing or empty." });
+  }
+}
+
+function isConnectionType(value: string): value is CreateOracleConnectionInput["connectionType"] {
+  return value === "serviceName" || value === "sid" || value === "tnsAlias" || value === "wallet";
 }

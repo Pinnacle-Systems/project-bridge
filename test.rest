@@ -1,0 +1,52 @@
+@host=http://localhost:3000
+
+# @name Create Connection
+POST {{host}}/bridge/connections
+x-admin-api-key: bridge-admin
+Content-Type: application/json
+
+{
+  "name": "PSSBSA",
+  "connectionType": "serviceName",
+  "host":"203.95.216.155",
+  "port":1556,
+  "serviceName":"avt06p",
+  "username": "PSSBSA",
+  "passwordSecretRef": "env:ORACLE_PASSWORD",
+  "defaultOwner": "PSSBSA"
+}
+###
+
+# @name List Connections
+GET {{host}}/bridge/connections
+x-admin-api-key: bridge-admin
+
+###
+@connection_id=959870a7-9d9c-4bd8-8be3-b4ca09320231
+
+# @name Get Connection Details
+GET {{host}}/bridge/connections/{{connection_id}}
+x-admin-api-key: bridge-admin
+
+###
+# @name Test connection
+POST {{host}}/bridge/connections/{{connection_id}}/test
+x-admin-api-key: bridge-admin
+
+{}
+###
+# @name Detect capabilities
+POST {{host}}/bridge/connections/{{connection_id}}/detect-capabilities
+x-admin-api-key: bridge-admin
+
+{}
+###
+# @name inspect connection
+POST {{host}}/bridge/connections/{{connection_id}}/inspect
+x-admin-api-key: bridge-admin
+Content-Type: application/json
+
+{
+  "owner": "PSSBSA"
+}
+###

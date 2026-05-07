@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { env, loadEnvFile } from "node:process";
+import { env } from "node:process";
 import { fileURLToPath } from "node:url";
+import { config as loadDotenv } from "dotenv";
 
 import { PrismaPg } from "@prisma/adapter-pg";
 
@@ -21,9 +21,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const envFiles = [resolve(scriptDir, "../../../.env"), resolve(scriptDir, "../.env")];
 
 for (const envFile of envFiles) {
-  if (existsSync(envFile)) {
-    loadEnvFile(envFile);
-  }
+  loadDotenv({ path: envFile, quiet: true });
 }
 
 const driverMode = env.ORACLE_DRIVER_MODE ?? env.NODE_ORACLEDB_DRIVER_MODE;

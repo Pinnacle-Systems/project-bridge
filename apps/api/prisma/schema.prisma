@@ -30,6 +30,7 @@ model ApiConnection {
   schemaSnapshots OracleSchemaSnapshot[]
   contractDrafts  ApiContractDraft[]
 
+  @@unique([name])
   @@index([connectionType])
   @@index([defaultOwner])
   @@index([status])

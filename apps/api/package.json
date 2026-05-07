@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "node --import tsx/esm src/server.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:migrate:create": "prisma migrate dev --create-only",
@@ -14,6 +16,7 @@
   "dependencies": {
     "@prisma/adapter-pg": "^7.7.0",
     "@prisma/client": "^7.0.0",
+    "dotenv": "^17.4.2",
     "express": "^5.1.0",
     "oracledb": "^6.10.0",
     "pg": "^8.20.0"

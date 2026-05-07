@@ -69,4 +69,20 @@ describe("Bridge operational metadata schema", () => {
     );
     expect(migrations).toContain('ON "published_contracts" USING GIN ("contract_data")');
   });
+
+  it("defines unique connection names in Prisma", () => {
+    expect(schema).toContain("@@unique([name])");
+  });
+
+  migrationIt("adds unique indexes for connection names and Oracle endpoint identity", () => {
+    expect(migrations).toContain('CREATE UNIQUE INDEX "api_connections_name_key"');
+    expect(migrations).toContain('CREATE UNIQUE INDEX "api_connections_service_name_endpoint_key"');
+    expect(migrations).toContain("WHERE \"connection_type\" = 'serviceName'");
+    expect(migrations).toContain('CREATE UNIQUE INDEX "api_connections_sid_endpoint_key"');
+    expect(migrations).toContain("WHERE \"connection_type\" = 'sid'");
+    expect(migrations).toContain('CREATE UNIQUE INDEX "api_connections_tns_alias_endpoint_key"');
+    expect(migrations).toContain("WHERE \"connection_type\" = 'tnsAlias'");
+    expect(migrations).toContain('CREATE UNIQUE INDEX "api_connections_wallet_endpoint_key"');
+    expect(migrations).toContain("WHERE \"connection_type\" = 'wallet'");
+  });
 });

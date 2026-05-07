@@ -1,8 +1,8 @@
 import type { OracleConnectionRegistry } from "../connections/index.js";
 import type { OracleCapabilityDetector } from "../connections/oracle-capabilities.js";
 import type { OracleSchemaInspector, StoredOracleSchemaSnapshot } from "../oracleInspector/index.js";
-import type { DraftContractService } from "../contracts/draft-contracts.js";
-import type { ContractPublishService, StoredPublishedContract } from "../contracts/publish-contracts.js";
+import type { DraftContractService, StoredPublishedContract } from "../contracts/draft-contracts.js";
+import type { ContractPublishService } from "../contracts/publish-contracts.js";
 import type { ContractCompiler } from "../compiler/index.js";
 import type { ContractCache } from "../contracts/contract-cache.js";
 import type { OracleConnectorAdapter } from "../connections/oracle-adapter.js";
@@ -23,7 +23,7 @@ export type StoredCompilerDiagnostic = {
 
 export type StoredAuditLog = {
   id: string;
-  type: string;
+  eventType: string;
   actor: string | null;
   metadata: Record<string, unknown> | null;
   occurredAt: Date;
@@ -52,7 +52,7 @@ export type BridgeAdminStore = {
   };
   auditLog: {
     findMany(args?: {
-      where?: { type?: string };
+      where?: { eventType?: string };
       orderBy?: { occurredAt?: "asc" | "desc" };
       take?: number;
     }): Promise<StoredAuditLog[]>;
