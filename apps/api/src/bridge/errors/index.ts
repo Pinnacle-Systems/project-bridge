@@ -38,4 +38,16 @@ export type OracleErrorMapping = {
   bridgeError: BridgeApiError;
 };
 
+/** Canonical response body for CONTRACT_SCHEMA_MISMATCH errors. */
+export function schemaMismatchBody() {
+  return {
+    success: false as const,
+    error: {
+      code: "CONTRACT_SCHEMA_MISMATCH" as const,
+      message: "This API contract no longer matches the underlying Oracle schema.",
+      status: 500
+    }
+  };
+}
+
 export { translateOracleError } from "./translator.js";

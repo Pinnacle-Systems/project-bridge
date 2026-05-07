@@ -5,6 +5,8 @@ import { dirname, resolve } from "node:path";
 import { env, loadEnvFile } from "node:process";
 import { fileURLToPath } from "node:url";
 
+import { PrismaPg } from "@prisma/adapter-pg";
+
 import type { OracleConnectionRecord } from "../src/bridge/connections/index.js";
 import { createOracleConnectorAdapter } from "../src/bridge/connections/oracle-adapter.js";
 import {
@@ -13,6 +15,7 @@ import {
   type OracleSchemaSnapshot,
   type StoredOracleSchemaSnapshot
 } from "../src/bridge/oracleInspector/index.js";
+import { PrismaClient } from "../src/generated/prisma/client.js";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const envFiles = [resolve(scriptDir, "../../../.env"), resolve(scriptDir, "../.env")];
@@ -44,7 +47,11 @@ if (process.platform === "linux" && driverMode === "thick" && clientLibDir) {
 
 const owner = requiredEnv("ORACLE_OWNER").toUpperCase();
 const connection = createConnectionRecord(owner);
-const snapshots: StoredOracleSchemaSnapshot[] = [];
+const metadataDatabaseUrl =
+  env.DATABASE_URL ?? "postgresql://postgres:mysecretpassword@localhost:5432/postgres?schema=public";
+const prisma = new PrismaClient({
+  adapter: new PrismaPg({ connectionString: metadataDatabaseUrl })
+});
 
 const store: OracleSchemaInspectorStore = {
   apiConnection: {
@@ -63,16 +70,10 @@ const store: OracleSchemaInspectorStore = {
   },
   oracleSchemaSnapshot: {
     async create({ data }) {
-      const storedSnapshot: StoredOracleSchemaSnapshot = {
-        id: randomUUID(),
-        apiConnectionId: data.apiConnectionId,
-        oracleOwner: data.oracleOwner,
-        snapshotData: data.snapshotData,
-        capturedAt: new Date(),
-        capturedBy: data.capturedBy ?? null
-      };
-      snapshots.push(storedSnapshot);
-      return storedSnapshot;
+      const storedSnapshot = await prisma.oracleSchemaSnapshot.create({
+        data
+      });
+      return storedSnapshot as unknown as StoredOracleSchemaSnapshot;
     }
   }
 };
@@ -90,8 +91,13 @@ const inspector = createOracleSchemaInspector({
   capturedBy: "oracle-inspect"
 });
 
-const { snapshot } = await inspector.inspectOracleSchema(connection.id, owner);
-printSnapshotSummary(snapshot);
+try {
+  await upsertConnectionRecord(connection);
+  const { snapshot, storedSnapshot } = await inspector.inspectOracleSchema(connection.id, owner);
+  printSnapshotSummary(snapshot, storedSnapshot);
+} finally {
+  await prisma.$disconnect();
+}
 
 function createConnectionRecord(defaultOwner: string): OracleConnectionRecord {
   const now = new Date();
@@ -118,7 +124,50 @@ function createConnectionRecord(defaultOwner: string): OracleConnectionRecord {
   };
 }
 
-function printSnapshotSummary(snapshot: OracleSchemaSnapshot): void {
+async function upsertConnectionRecord(record: OracleConnectionRecord): Promise<void> {
+  await prisma.apiConnection.upsert({
+    where: { id: record.id },
+    create: {
+      id: record.id,
+      name: record.name,
+      connectionType: record.connectionType,
+      host: record.host,
+      port: record.port,
+      serviceName: record.serviceName,
+      sid: record.sid,
+      tnsAlias: record.tnsAlias,
+      username: record.username,
+      encryptedPassword: record.encryptedPassword,
+      passwordSecretRef: record.passwordSecretRef,
+      walletPath: record.walletPath,
+      walletSecretRef: record.walletSecretRef,
+      defaultOwner: record.defaultOwner,
+      oracleVersion: record.oracleVersion,
+      paginationStrategy: record.paginationStrategy,
+      status: record.status
+    },
+    update: {
+      name: record.name,
+      connectionType: record.connectionType,
+      host: record.host,
+      port: record.port,
+      serviceName: record.serviceName,
+      sid: record.sid,
+      tnsAlias: record.tnsAlias,
+      username: record.username,
+      encryptedPassword: record.encryptedPassword,
+      passwordSecretRef: record.passwordSecretRef,
+      walletPath: record.walletPath,
+      walletSecretRef: record.walletSecretRef,
+      defaultOwner: record.defaultOwner,
+      oracleVersion: record.oracleVersion,
+      paginationStrategy: record.paginationStrategy,
+      status: record.status
+    }
+  });
+}
+
+function printSnapshotSummary(snapshot: OracleSchemaSnapshot, storedSnapshot: StoredOracleSchemaSnapshot): void {
   const objectPreview = snapshot.objects.slice(0, 10).map((object) => ({
     name: object.objectName,
     type: object.objectType,
@@ -138,12 +187,14 @@ function printSnapshotSummary(snapshot: OracleSchemaSnapshot): void {
   }));
 
   console.log("Oracle schema snapshot:", {
+    snapshotId: storedSnapshot.id,
+    connectionId: storedSnapshot.apiConnectionId,
     owner: snapshot.owner,
     inspectedAt: snapshot.inspectedAt,
     objects: snapshot.objects.length,
     sequences: snapshot.sequences.length,
     programUnits: snapshot.programUnits.length,
-    storedSnapshots: snapshots.length
+    storedAt: storedSnapshot.capturedAt
   });
   console.log("Object preview:", objectPreview);
   console.log("Sequence preview:", snapshot.sequences.slice(0, 10));

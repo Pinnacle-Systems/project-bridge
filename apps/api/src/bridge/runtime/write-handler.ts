@@ -13,7 +13,7 @@ import {
 } from "../audit/index.js";
 import type { PermissionChecker, RequestIdentity } from "./permissions.js";
 import { transformWriteValue } from "../transformers/engine.js";
-import { translateOracleError } from "../errors/translator.js";
+import { translateOracleError, schemaMismatchBody } from "../errors/index.js";
 import {
   buildInOutBind,
   buildOutBind,
@@ -226,6 +226,9 @@ export function createWriteHandler(ctx: WriteHandlerContext) {
             code: translated.code
           })
         });
+      }
+      if (translated.code === "CONTRACT_SCHEMA_MISMATCH") {
+        return { status: 500, body: schemaMismatchBody() };
       }
       return {
         status: translated.statusCode,

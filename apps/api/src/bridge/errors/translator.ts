@@ -34,11 +34,11 @@ const DEFAULT_MAPPINGS: Record<string, Omit<BridgeApiError, "field" | "requestId
   "ORA-01400": { statusCode: 400, code: "REQUIRED_FIELD_MISSING",   message: "required field missing" },
   "ORA-01438": { statusCode: 400, code: "PRECISION_TOO_LARGE",      message: "precision/value too large" },
   "ORA-12899": { statusCode: 400, code: "VALUE_TOO_LARGE",          message: "value too large for column" },
-  "ORA-00942": { statusCode: 500, code: "CONTRACT_SCHEMA_MISMATCH", message: "CONTRACT_SCHEMA_MISMATCH" },
-  "ORA-00904": { statusCode: 500, code: "CONTRACT_SCHEMA_MISMATCH", message: "CONTRACT_SCHEMA_MISMATCH" },
-  "ORA-01031": { statusCode: 500, code: "DB_PRIVILEGE_ERROR",       message: "DB privilege/config error" },
+  "ORA-00942": { statusCode: 500, code: "CONTRACT_SCHEMA_MISMATCH", message: "This API contract no longer matches the underlying Oracle schema." },
+  "ORA-00904": { statusCode: 500, code: "CONTRACT_SCHEMA_MISMATCH", message: "This API contract no longer matches the underlying Oracle schema." },
+  "ORA-01031": { statusCode: 500, code: "CONTRACT_SCHEMA_MISMATCH", message: "This API contract no longer matches the underlying Oracle schema." },
   "ORA-06550": { statusCode: 500, code: "PLSQL_EXECUTION_ERROR",    message: "PL/SQL execution error" },
-  "ORA-04063": { statusCode: 500, code: "INVALID_ORACLE_OBJECT",    message: "invalid package/view/procedure" },
+  "ORA-04063": { statusCode: 500, code: "CONTRACT_SCHEMA_MISMATCH", message: "This API contract no longer matches the underlying Oracle schema." },
   "ORA-01403": { statusCode: 404, code: "NOT_FOUND",                message: "not found" }
 };
 

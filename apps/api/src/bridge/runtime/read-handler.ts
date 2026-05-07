@@ -10,7 +10,7 @@ import {
 import type { PermissionChecker, RequestIdentity } from "./permissions.js";
 import { buildSelectQuery, type QueryRequestFilter, type QueryRequestSort } from "../database/query-builder.js";
 import { transformReadValue, applyReadPermissionMask } from "../transformers/engine.js";
-import { translateOracleError } from "../errors/translator.js";
+import { translateOracleError, schemaMismatchBody } from "../errors/index.js";
 
 export type ReadHandlerContext = {
   cache: ContractCache;
@@ -137,6 +137,9 @@ export function createReadHandler(ctx: ReadHandlerContext) {
             code: translated.code
           })
         });
+      }
+      if (translated.code === "CONTRACT_SCHEMA_MISMATCH") {
+        return { status: 500, body: schemaMismatchBody() };
       }
       return {
         status: translated.statusCode,

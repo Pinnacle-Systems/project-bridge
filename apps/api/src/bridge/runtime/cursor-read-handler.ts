@@ -7,11 +7,12 @@ import type {
 import {
   buildRuntimeAuditMetadata,
   extractOracleErrorCode,
+  isSchemaMismatchCode,
   type AuditLogger
 } from "../audit/index.js";
 import type { PermissionChecker, RequestIdentity } from "./permissions.js";
 import { transformReadValue, applyReadPermissionMask } from "../transformers/engine.js";
-import { translateOracleError } from "../errors/translator.js";
+import { translateOracleError, schemaMismatchBody } from "../errors/index.js";
 import {
   buildOutBind,
   buildProcedureName,
@@ -163,6 +164,22 @@ export function createCursorReadHandler(ctx: CursorReadHandlerContext) {
           code: translated.code
         })
       });
+      if (isSchemaMismatchCode(oracleErrorCode)) {
+        ctx.audit?.log({
+          type: "runtime.schema_mismatch",
+          metadata: buildRuntimeAuditMetadata({
+            contract,
+            operation: policy.operation,
+            status: "failed",
+            startedAt,
+            requestId: input.requestId,
+            userId: input.identity?.userId,
+            oracleErrorCode,
+            code: translated.code
+          })
+        });
+        return { status: 500, body: schemaMismatchBody() };
+      }
       return {
         status: translated.statusCode,
         body: { error: translated.message, code: translated.code }
@@ -222,6 +239,22 @@ export function createCursorReadHandler(ctx: CursorReadHandlerContext) {
           code: translated.code
         })
       });
+      if (isSchemaMismatchCode(oracleErrorCode)) {
+        ctx.audit?.log({
+          type: "runtime.schema_mismatch",
+          metadata: buildRuntimeAuditMetadata({
+            contract,
+            operation: policy.operation,
+            status: "failed",
+            startedAt,
+            requestId: input.requestId,
+            userId: input.identity?.userId,
+            oracleErrorCode,
+            code: translated.code
+          })
+        });
+        return { status: 500, body: schemaMismatchBody() };
+      }
       return {
         status: translated.statusCode,
         body: { error: translated.message, code: translated.code }

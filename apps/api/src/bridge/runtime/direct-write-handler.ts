@@ -14,7 +14,7 @@ import {
 } from "../audit/index.js";
 import type { PermissionChecker, RequestIdentity } from "./permissions.js";
 import { transformWriteValue } from "../transformers/engine.js";
-import { translateOracleError } from "../errors/translator.js";
+import { translateOracleError, schemaMismatchBody } from "../errors/index.js";
 import { quoteIdentifier } from "../database/query-builder.js";
 import { buildOutBind, type OracleBindTypeRegistry } from "./oracle-helpers.js";
 
@@ -266,6 +266,9 @@ export function createDirectWriteHandler(ctx: DirectWriteHandlerContext) {
             code: translated.code
           })
         });
+      }
+      if (translated.code === "CONTRACT_SCHEMA_MISMATCH") {
+        return { status: 500, body: schemaMismatchBody() };
       }
       return {
         status: translated.statusCode,

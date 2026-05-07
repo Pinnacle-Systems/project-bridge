@@ -70,10 +70,11 @@ describe("Oracle Error Translator", () => {
     expect(apiError.code).toBe("CONTRACT_SCHEMA_MISMATCH");
   });
 
-  it("translates ORA-01031 (DB privilege/config error)", () => {
+  it("translates ORA-01031 (CONTRACT_SCHEMA_MISMATCH)", () => {
     const apiError = translateOracleError(new Error("ORA-01031: insufficient privileges"));
     expect(apiError.statusCode).toBe(500);
-    expect(apiError.code).toBe("DB_PRIVILEGE_ERROR");
+    expect(apiError.code).toBe("CONTRACT_SCHEMA_MISMATCH");
+    expect(apiError.message).toBe("This API contract no longer matches the underlying Oracle schema.");
   });
 
   it("translates ORA-06550 (PL/SQL execution error)", () => {
@@ -82,10 +83,11 @@ describe("Oracle Error Translator", () => {
     expect(apiError.code).toBe("PLSQL_EXECUTION_ERROR");
   });
 
-  it("translates ORA-04063 (invalid package/view/procedure)", () => {
+  it("translates ORA-04063 (CONTRACT_SCHEMA_MISMATCH)", () => {
     const apiError = translateOracleError(new Error("ORA-04063: view \"HR.BAD_VIEW\" has errors"));
     expect(apiError.statusCode).toBe(500);
-    expect(apiError.code).toBe("INVALID_ORACLE_OBJECT");
+    expect(apiError.code).toBe("CONTRACT_SCHEMA_MISMATCH");
+    expect(apiError.message).toBe("This API contract no longer matches the underlying Oracle schema.");
   });
 
   it("translates ORA-01403 (not found)", () => {

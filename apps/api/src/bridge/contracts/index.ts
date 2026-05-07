@@ -53,6 +53,15 @@ export type TriggerIdGeneration = {
 
 export type IdGenerationConfig = SequenceIdGeneration | TriggerIdGeneration;
 
+/** Baseline column metadata captured at publish time for drift detection. */
+export type ColumnHints = {
+  dataLength?: number;
+  charLength?: number;
+  precision?: number;
+  scale?: number;
+  nullable?: boolean;
+};
+
 export type ApiFieldMapping = {
   apiField: string;
   apiType: ApiFieldType;
@@ -63,6 +72,7 @@ export type ApiFieldMapping = {
   writeOnly?: boolean;
   required?: boolean;
   transformers?: OracleTransformer[];
+  columnHints?: ColumnHints;
 };
 
 export type OperationMode = "package_procedure" | "direct_table";

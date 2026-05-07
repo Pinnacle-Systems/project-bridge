@@ -118,5 +118,10 @@ export function extractOracleErrorCode(error: unknown): string | undefined {
 }
 
 export function isSchemaMismatchCode(code: string | undefined): boolean {
-  return code === "ORA-00942" || code === "ORA-00904";
+  return (
+    code === "ORA-00942" ||
+    code === "ORA-00904" ||
+    code === "ORA-04063" ||
+    code === "ORA-01031"
+  );
 }

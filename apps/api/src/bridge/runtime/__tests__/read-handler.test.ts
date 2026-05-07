@@ -154,9 +154,10 @@ describe("ReadHandler", () => {
     const { status, body } = await handle({ contractPath: "/api/hr/employees" });
 
     expect(status).toBe(500);
-    expect((body as any).code).toBe("CONTRACT_SCHEMA_MISMATCH");
+    expect((body as any).success).toBe(false);
+    expect((body as any).error.code).toBe("CONTRACT_SCHEMA_MISMATCH");
     // Must not leak the raw ORA message
-    expect((body as any).error).not.toContain("ORA-00942");
+    expect(JSON.stringify(body)).not.toContain("ORA-00942");
   });
 
   it("8. ORA-01403 returns 404 with NOT_FOUND code.", async () => {
