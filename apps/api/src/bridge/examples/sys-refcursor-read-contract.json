@@ -1,0 +1,77 @@
+{
+  "resource": "employees-search",
+  "endpoint": "/employees/search",
+  "source": {
+    "owner": "HRMS_OWNER",
+    "type": "package",
+    "packageName": "PKG_EMPLOYEE_API",
+    "procedureName": "GET_EMPLOYEES"
+  },
+  "fields": [],
+  "operations": [
+    {
+      "operation": "list",
+      "enabled": true
+    }
+  ],
+  "procedureParams": [
+    {
+      "paramName": "P_DEPARTMENT_ID",
+      "direction": "in",
+      "apiField": "departmentId",
+      "oracleType": "number",
+      "required": false
+    },
+    {
+      "paramName": "P_RESULT",
+      "direction": "out",
+      "oracleType": "sys_refcursor"
+    }
+  ],
+  "sysRefCursor": {
+    "paramName": "P_RESULT",
+    "fields": [
+      {
+        "apiField": "employeeId",
+        "apiType": "integer",
+        "oracleType": "number",
+        "dbColumn": "EMPLOYEE_ID",
+        "nullable": false
+      },
+      {
+        "apiField": "employeeCode",
+        "apiType": "string",
+        "oracleType": "varchar2",
+        "dbColumn": "EMPLOYEE_CODE",
+        "nullable": false
+      },
+      {
+        "apiField": "employeeName",
+        "apiType": "string",
+        "oracleType": "varchar2",
+        "dbColumn": "EMPLOYEE_NAME",
+        "nullable": false
+      },
+      {
+        "apiField": "activeFlag",
+        "apiType": "boolean",
+        "oracleType": "char",
+        "dbColumn": "ACTIVE_FLAG",
+        "nullable": true,
+        "transformers": [
+          {
+            "kind": "booleanMapping",
+            "oracleType": "char",
+            "trueValue": "Y",
+            "falseValue": "N"
+          }
+        ]
+      }
+    ]
+  },
+  "pagination": {
+    "defaultLimit": 100,
+    "maxLimit": 1000,
+    "strategy": "offsetFetch"
+  }
+}

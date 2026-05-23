@@ -1,0 +1,64 @@
+{
+  "resource": "employee-master",
+  "endpoint": "/employee-master",
+  "source": {
+    "owner": "HRMS_OWNER",
+    "type": "table",
+    "name": "EMPLOYEE_MASTER"
+  },
+  "fields": [
+    {
+      "apiField": "employeeId",
+      "apiType": "integer",
+      "oracleType": "number",
+      "dbColumn": "EMPLOYEE_ID",
+      "readOnly": true,
+      "nullable": false
+    },
+    {
+      "apiField": "employeeCode",
+      "apiType": "string",
+      "oracleType": "varchar2",
+      "dbColumn": "EMPLOYEE_CODE",
+      "nullable": false
+    },
+    {
+      "apiField": "employeeName",
+      "apiType": "string",
+      "oracleType": "varchar2",
+      "dbColumn": "EMPLOYEE_NAME",
+      "nullable": false
+    },
+    {
+      "apiField": "isActive",
+      "apiType": "boolean",
+      "oracleType": "char",
+      "dbColumn": "IS_ACTIVE",
+      "nullable": false,
+      "transformers": [
+        {
+          "kind": "booleanMapping",
+          "oracleType": "char",
+          "trueValue": "Y",
+          "falseValue": "N"
+        }
+      ]
+    }
+  ],
+  "operations": [
+    {
+      "operation": "create",
+      "enabled": true,
+      "mode": "direct_table"
+    },
+    {
+      "operation": "update",
+      "enabled": true,
+      "mode": "direct_table"
+    }
+  ],
+  "idGeneration": {
+    "strategy": "sequence",
+    "sequenceName": "EMPLOYEE_MASTER_SEQ"
+  }
+}

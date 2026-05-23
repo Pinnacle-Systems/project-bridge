@@ -1,0 +1,80 @@
+{
+  "resource": "employees",
+  "endpoint": "/employees",
+  "source": {
+    "owner": "HRMS_OWNER",
+    "type": "package",
+    "packageName": "PKG_EMPLOYEE_API",
+    "procedureName": "CREATE_EMPLOYEE"
+  },
+  "fields": [
+    {
+      "apiField": "employeeId",
+      "apiType": "integer",
+      "oracleType": "number",
+      "readOnly": true,
+      "nullable": false
+    },
+    {
+      "apiField": "employeeCode",
+      "apiType": "string",
+      "oracleType": "varchar2",
+      "nullable": false
+    },
+    {
+      "apiField": "employeeName",
+      "apiType": "string",
+      "oracleType": "varchar2",
+      "nullable": false
+    },
+    {
+      "apiField": "isActive",
+      "apiType": "boolean",
+      "oracleType": "varchar2",
+      "nullable": false,
+      "transformers": [
+        {
+          "kind": "booleanMapping",
+          "oracleType": "varchar2",
+          "trueValue": "Y",
+          "falseValue": "N"
+        }
+      ]
+    }
+  ],
+  "operations": [
+    {
+      "operation": "create",
+      "enabled": true
+    }
+  ],
+  "procedureParams": [
+    {
+      "paramName": "P_EMPLOYEE_CODE",
+      "direction": "in",
+      "apiField": "employeeCode",
+      "oracleType": "varchar2",
+      "required": true
+    },
+    {
+      "paramName": "P_EMPLOYEE_NAME",
+      "direction": "in",
+      "apiField": "employeeName",
+      "oracleType": "varchar2",
+      "required": true
+    },
+    {
+      "paramName": "P_IS_ACTIVE",
+      "direction": "in",
+      "apiField": "isActive",
+      "oracleType": "varchar2",
+      "required": false
+    },
+    {
+      "paramName": "P_EMPLOYEE_ID",
+      "direction": "out",
+      "apiField": "employeeId",
+      "oracleType": "number"
+    }
+  ]
+}

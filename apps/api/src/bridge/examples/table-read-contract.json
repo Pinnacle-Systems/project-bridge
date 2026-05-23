@@ -1,0 +1,101 @@
+{
+  "resource": "employees",
+  "endpoint": "/employees",
+  "source": {
+    "owner": "HRMS_OWNER",
+    "type": "table",
+    "name": "EMPLOYEE_MASTER"
+  },
+  "fields": [
+    {
+      "apiField": "employeeId",
+      "apiType": "integer",
+      "oracleType": "number",
+      "dbColumn": "EMPLOYEE_ID",
+      "readOnly": true,
+      "nullable": false
+    },
+    {
+      "apiField": "employeeCode",
+      "apiType": "string",
+      "oracleType": "varchar2",
+      "dbColumn": "EMPLOYEE_CODE",
+      "nullable": false
+    },
+    {
+      "apiField": "employeeName",
+      "apiType": "string",
+      "oracleType": "varchar2",
+      "dbColumn": "EMPLOYEE_NAME",
+      "nullable": false
+    },
+    {
+      "apiField": "departmentId",
+      "apiType": "integer",
+      "oracleType": "number",
+      "dbColumn": "DEPARTMENT_ID",
+      "nullable": true
+    },
+    {
+      "apiField": "hireDate",
+      "apiType": "date-time",
+      "oracleType": "date",
+      "dbColumn": "HIRE_DATE",
+      "nullable": true
+    },
+    {
+      "apiField": "isActive",
+      "apiType": "boolean",
+      "oracleType": "char",
+      "dbColumn": "IS_ACTIVE",
+      "nullable": false,
+      "transformers": [
+        {
+          "kind": "booleanMapping",
+          "oracleType": "char",
+          "trueValue": "Y",
+          "falseValue": "N"
+        }
+      ]
+    }
+  ],
+  "operations": [
+    {
+      "operation": "list",
+      "enabled": true
+    },
+    {
+      "operation": "read",
+      "enabled": true
+    }
+  ],
+  "pagination": {
+    "defaultLimit": 50,
+    "maxLimit": 200,
+    "strategy": "offsetFetch"
+  },
+  "filters": [
+    {
+      "field": "employeeCode",
+      "operators": ["eq"]
+    },
+    {
+      "field": "departmentId",
+      "operators": ["eq"]
+    },
+    {
+      "field": "isActive",
+      "operators": ["eq"]
+    }
+  ],
+  "sorts": [
+    {
+      "field": "employeeName",
+      "directions": ["asc", "desc"]
+    },
+    {
+      "field": "hireDate",
+      "directions": ["asc", "desc"]
+    }
+  ]
+}

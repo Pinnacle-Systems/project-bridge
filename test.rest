@@ -1,95 +1,542 @@
-@host=http://localhost:3000
+## Bridge — Golden-Path REST Client
+## Covers the full lifecycle: connection → inspect → draft → publish → invoke → drift → retire.
+## Each section that creates a resource has a variable assignment below it.
+## Copy UUIDs from response bodies into the variable declarations before running the next section.
+
+@baseUrl = http://localhost:3000
+@adminApiKey = change-me-before-use
+
+###############################################################################
+# 1. CONNECTIONS
+###############################################################################
 
 # @name Create Connection
-POST {{host}}/bridge/connections
-x-admin-api-key: bridge-admin
+# Creates an Oracle connection record. Does not open a live connection yet.
+POST {{baseUrl}}/bridge/connections
+x-admin-api-key: {{adminApiKey}}
 Content-Type: application/json
 
 {
-  "name": "PSSBSA",
+  "name": "HRMS Production",
   "connectionType": "serviceName",
-  "host":"203.95.216.155",
-  "port":1556,
-  "serviceName":"avt06p",
-  "username": "PSSBSA",
+  "host": "oracle.example.com",
+  "port": 1521,
+  "serviceName": "ORCL",
+  "username": "BRIDGE_RUNTIME_USER",
   "passwordSecretRef": "env:ORACLE_PASSWORD",
-  "defaultOwner": "PSSBSA"
+  "defaultOwner": "HRMS_OWNER"
 }
+
+###
+
+# Copy the id from the response above.
+@connectionId = 00000000-0000-0000-0000-000000000000
+
 ###
 
 # @name List Connections
-GET {{host}}/bridge/connections
-x-admin-api-key: bridge-admin
+GET {{baseUrl}}/bridge/connections
+x-admin-api-key: {{adminApiKey}}
 
 ###
-@connection_id=959870a7-9d9c-4bd8-8be3-b4ca09320231
 
-# @name Get Connection Details
-GET {{host}}/bridge/connections/{{connection_id}}
-x-admin-api-key: bridge-admin
+# @name Get Connection
+GET {{baseUrl}}/bridge/connections/{{connectionId}}
+x-admin-api-key: {{adminApiKey}}
 
 ###
-# @name Test connection
-POST {{host}}/bridge/connections/{{connection_id}}/test
-x-admin-api-key: bridge-admin
+
+# @name Test Connection
+# Opens a live Oracle connection, detects capabilities, marks connection as active.
+# Expect: { success: true, data: { oracleVersion: "...", ... } }
+POST {{baseUrl}}/bridge/connections/{{connectionId}}/test
+x-admin-api-key: {{adminApiKey}}
+Content-Type: application/json
 
 {}
+
 ###
-# @name Detect capabilities
-POST {{host}}/bridge/connections/{{connection_id}}/detect-capabilities
-x-admin-api-key: bridge-admin
+
+# @name Detect Capabilities (optional)
+# Same as test but does not mark the connection active.
+POST {{baseUrl}}/bridge/connections/{{connectionId}}/detect-capabilities
+x-admin-api-key: {{adminApiKey}}
+Content-Type: application/json
 
 {}
-###
-# @name inspect connection
-POST {{host}}/bridge/connections/{{connection_id}}/inspect
-x-admin-api-key: bridge-admin
+
+###############################################################################
+# 2. SCHEMA INSPECTION
+###############################################################################
+
+# @name Inspect Schema
+# Snapshots all tables, views, sequences, and program units for the given owner.
+# Expect: 201 with a snapshot id and a summary of object counts.
+POST {{baseUrl}}/bridge/connections/{{connectionId}}/inspect
+x-admin-api-key: {{adminApiKey}}
 Content-Type: application/json
 
 {
-  "owner": "PSSBSA"
+  "owner": "HRMS_OWNER"
 }
-###
-
-@snapshot_id=e71281cc-adfe-47c1-ae21-0d116b3739b6
-
-# @name List snapshots
-GET {{host}}/bridge/schema-snapshots
-x-admin-api-key: bridge-admin
 
 ###
-# @name Get snapshot summary
-GET {{host}}/bridge/schema-snapshots/{{snapshot_id}}
-x-admin-api-key: bridge-admin
+
+# Copy the id from the response above.
+@snapshotId = 00000000-0000-0000-0000-000000000000
 
 ###
-# @name List objects (tables/views)
-GET {{host}}/bridge/schema-snapshots/{{snapshot_id}}/objects
-x-admin-api-key: bridge-admin
+
+# @name List Snapshots
+GET {{baseUrl}}/bridge/schema-snapshots
+x-admin-api-key: {{adminApiKey}}
 
 ###
-# @name Get object detail (columns, constraints, indexes)
-GET {{host}}/bridge/schema-snapshots/{{snapshot_id}}/objects/YFPURREG
-x-admin-api-key: bridge-admin
+
+# @name List Snapshots for Connection
+GET {{baseUrl}}/bridge/schema-snapshots?connectionId={{connectionId}}
+x-admin-api-key: {{adminApiKey}}
 
 ###
-# @name List sequences
-GET {{host}}/bridge/schema-snapshots/{{snapshot_id}}/sequences
-x-admin-api-key: bridge-admin
+
+# @name Get Snapshot Summary
+# Returns object/sequence/programUnit counts without the full snapshotData blob.
+GET {{baseUrl}}/bridge/schema-snapshots/{{snapshotId}}
+x-admin-api-key: {{adminApiKey}}
 
 ###
-# @name List program units (procedures/functions/packages)
-GET {{host}}/bridge/schema-snapshots/{{snapshot_id}}/program-units
-x-admin-api-key: bridge-admin
+
+# @name List Snapshot Objects (tables and views)
+# Returns slim rows: owner, objectName, objectType, objectStatus, columnCount.
+GET {{baseUrl}}/bridge/schema-snapshots/{{snapshotId}}/objects
+x-admin-api-key: {{adminApiKey}}
 
 ###
-# @name Get program unit detail (with arguments)
-GET {{host}}/bridge/schema-snapshots/{{snapshot_id}}/program-units/ACCADDSHOBMDET
-x-admin-api-key: bridge-admin
+
+# @name Get Snapshot Object Detail
+# Returns full column list, constraints, and indexes for one table/view.
+# Replace EMPLOYEE_MASTER with the actual table name from the list above.
+GET {{baseUrl}}/bridge/schema-snapshots/{{snapshotId}}/objects/EMPLOYEE_MASTER
+x-admin-api-key: {{adminApiKey}}
 
 ###
-# @name Get package member detail (disambiguate with ?package=)
-GET {{host}}/bridge/schema-snapshots/{{snapshot_id}}/program-units/ACCADDSHOBMDET?package=SOME_PKG
-x-admin-api-key: bridge-admin
+
+# @name List Snapshot Sequences
+GET {{baseUrl}}/bridge/schema-snapshots/{{snapshotId}}/sequences
+x-admin-api-key: {{adminApiKey}}
+
+###
+
+# @name List Snapshot Program Units (procedures, functions, packages)
+# Returns slim rows: owner, packageName, name, unitType, objectStatus, argumentCount.
+GET {{baseUrl}}/bridge/schema-snapshots/{{snapshotId}}/program-units
+x-admin-api-key: {{adminApiKey}}
+
+###
+
+# @name Get Program Unit Detail
+# Replace CREATE_EMPLOYEE and PKG_EMPLOYEE_API with actual names.
+GET {{baseUrl}}/bridge/schema-snapshots/{{snapshotId}}/program-units/CREATE_EMPLOYEE?package=PKG_EMPLOYEE_API
+x-admin-api-key: {{adminApiKey}}
+
+###############################################################################
+# 3. DRAFT CONTRACTS
+###############################################################################
+
+# @name Create Draft — Table Read
+# See src/bridge/examples/table-read-contract.json for a fully annotated version.
+# The 'contract' value below is a minimal read-only table contract.
+POST {{baseUrl}}/bridge/contracts/drafts
+x-admin-api-key: {{adminApiKey}}
+Content-Type: application/json
+
+{
+  "apiConnectionId": "{{connectionId}}",
+  "contract": {
+    "resource": "employees",
+    "endpoint": "/employees",
+    "source": {
+      "owner": "HRMS_OWNER",
+      "type": "table",
+      "name": "EMPLOYEE_MASTER"
+    },
+    "fields": [
+      {
+        "apiField": "employeeId",
+        "apiType": "integer",
+        "oracleType": "number",
+        "dbColumn": "EMPLOYEE_ID",
+        "readOnly": true,
+        "nullable": false
+      },
+      {
+        "apiField": "employeeCode",
+        "apiType": "string",
+        "oracleType": "varchar2",
+        "dbColumn": "EMPLOYEE_CODE",
+        "nullable": false
+      },
+      {
+        "apiField": "employeeName",
+        "apiType": "string",
+        "oracleType": "varchar2",
+        "dbColumn": "EMPLOYEE_NAME",
+        "nullable": false
+      },
+      {
+        "apiField": "isActive",
+        "apiType": "boolean",
+        "oracleType": "char",
+        "dbColumn": "IS_ACTIVE",
+        "nullable": false,
+        "transformers": [
+          {
+            "kind": "booleanMapping",
+            "oracleType": "char",
+            "trueValue": "Y",
+            "falseValue": "N"
+          }
+        ]
+      }
+    ],
+    "operations": [
+      { "operation": "list", "enabled": true },
+      { "operation": "read", "enabled": true }
+    ],
+    "pagination": {
+      "defaultLimit": 50,
+      "maxLimit": 200,
+      "strategy": "offsetFetch"
+    },
+    "filters": [
+      { "field": "isActive", "operators": ["eq"] }
+    ],
+    "sorts": [
+      { "field": "employeeName", "directions": ["asc", "desc"] }
+    ]
+  }
+}
+
+###
+
+# Copy the id from the response above.
+@draftId = 00000000-0000-0000-0000-000000000000
+
+###
+
+# @name List Drafts
+GET {{baseUrl}}/bridge/contracts/drafts
+x-admin-api-key: {{adminApiKey}}
+
+###
+
+# @name List Drafts for Connection
+GET {{baseUrl}}/bridge/contracts/drafts?apiConnectionId={{connectionId}}
+x-admin-api-key: {{adminApiKey}}
+
+###
+
+# @name Get Draft
+GET {{baseUrl}}/bridge/contracts/drafts/{{draftId}}
+x-admin-api-key: {{adminApiKey}}
+
+###############################################################################
+# 4. COMPILE AND VALIDATE
+###############################################################################
+
+# @name Validate Draft (dry-run — does not persist)
+# Compiles the contract against the Oracle snapshot without saving anything.
+# Expect: { valid: true, contract: { ... }, diagnostics: [{ severity: "info", ... }] }
+# If valid is false, diagnostics will include severity: "error" entries.
+POST {{baseUrl}}/bridge/compiler/validate
+x-admin-api-key: {{adminApiKey}}
+Content-Type: application/json
+
+{
+  "apiConnectionId": "{{connectionId}}",
+  "contract": {
+    "resource": "employees",
+    "endpoint": "/employees",
+    "source": {
+      "owner": "HRMS_OWNER",
+      "type": "table",
+      "name": "EMPLOYEE_MASTER"
+    },
+    "fields": [
+      {
+        "apiField": "employeeId",
+        "apiType": "integer",
+        "oracleType": "number",
+        "dbColumn": "EMPLOYEE_ID",
+        "readOnly": true,
+        "nullable": false
+      },
+      {
+        "apiField": "employeeName",
+        "apiType": "string",
+        "oracleType": "varchar2",
+        "dbColumn": "EMPLOYEE_NAME",
+        "nullable": false
+      }
+    ],
+    "operations": [
+      { "operation": "list", "enabled": true },
+      { "operation": "read", "enabled": true }
+    ]
+  }
+}
+
+###
+
+# @name Compile Draft (stateless — does not persist)
+# Same as validate but returns 422 on errors instead of wrapping them in valid:false.
+POST {{baseUrl}}/bridge/compiler/compile
+x-admin-api-key: {{adminApiKey}}
+Content-Type: application/json
+
+{
+  "apiConnectionId": "{{connectionId}}",
+  "contract": {
+    "resource": "employees",
+    "endpoint": "/employees",
+    "source": {
+      "owner": "HRMS_OWNER",
+      "type": "table",
+      "name": "EMPLOYEE_MASTER"
+    },
+    "fields": [
+      {
+        "apiField": "employeeId",
+        "apiType": "integer",
+        "oracleType": "number",
+        "dbColumn": "EMPLOYEE_ID",
+        "readOnly": true,
+        "nullable": false
+      },
+      {
+        "apiField": "employeeName",
+        "apiType": "string",
+        "oracleType": "varchar2",
+        "dbColumn": "EMPLOYEE_NAME",
+        "nullable": false
+      }
+    ],
+    "operations": [
+      { "operation": "list", "enabled": true },
+      { "operation": "read", "enabled": true }
+    ]
+  }
+}
+
+###############################################################################
+# 5. PUBLISH
+###############################################################################
+
+# @name Publish Draft
+# Recompiles the stored draft, persists the resolved contract, and deprecates any
+# prior active version for the same resource+endpoint.
+# Expect: 201 with { data: { id, resourceName, version, endpointPath, status: "active" } }
+POST {{baseUrl}}/bridge/contracts/drafts/{{draftId}}/publish
+x-admin-api-key: {{adminApiKey}}
+Content-Type: application/json
+
+{
+  "publishedBy": "your-name",
+  "changeReason": "Initial publish"
+}
+
+###
+
+# Copy the id from the response above.
+@publishedContractId = 00000000-0000-0000-0000-000000000000
+
+###
+
+# @name List Published Contracts
+GET {{baseUrl}}/bridge/contracts/published
+x-admin-api-key: {{adminApiKey}}
+
+###
+
+# @name Get Published Contract
+GET {{baseUrl}}/bridge/contracts/published/{{publishedContractId}}
+x-admin-api-key: {{adminApiKey}}
+
+###############################################################################
+# 6. CACHE
+###############################################################################
+
+# @name Reload Cache
+# Hot-reloads all active contracts from the database into the runtime cache.
+# Required after publishing if the server was not restarted.
+POST {{baseUrl}}/bridge/cache/reload
+x-admin-api-key: {{adminApiKey}}
+
+###
+
+# @name Get Cache Status
+GET {{baseUrl}}/bridge/cache/status
+x-admin-api-key: {{adminApiKey}}
+
+###############################################################################
+# 7. RUNTIME — TABLE / VIEW READ
+###############################################################################
+# Runtime endpoints are at /api/*, not /bridge/*.
+# They do NOT require x-admin-api-key.
+
+# @name Runtime GET list
+GET {{baseUrl}}/api/employees
+Content-Type: application/json
+
+###
+
+# @name Runtime GET list with pagination
+GET {{baseUrl}}/api/employees?limit=10&offset=0
+Content-Type: application/json
+
+###
+
+# @name Runtime GET list with filter
+# Only field names declared in the contract's 'filters' array are accepted.
+GET {{baseUrl}}/api/employees?filter[isActive]=true
+Content-Type: application/json
+
+###
+
+# @name Runtime GET list with sort
+# Only field names declared in the contract's 'sorts' array are accepted.
+GET {{baseUrl}}/api/employees?sort[employeeName]=asc
+Content-Type: application/json
+
+###
+
+# @name Runtime GET by id
+# Replace 1001 with a real primary key value from the list above.
+# The primary key is matched against the first readOnly field in the contract.
+GET {{baseUrl}}/api/employees/1001
+Content-Type: application/json
+
+###############################################################################
+# 8. RUNTIME — PACKAGE/PROCEDURE WRITE
+# Requires a package-write contract to be published for /employees.
+# See src/bridge/examples/package-write-contract.json.
+###############################################################################
+
+# @name Runtime POST (package procedure create)
+# Calls PKG_EMPLOYEE_API.CREATE_EMPLOYEE with IN params, returns OUT param employeeId.
+POST {{baseUrl}}/api/employees
+Content-Type: application/json
+
+{
+  "employeeCode": "EMP-DEMO-001",
+  "employeeName": "Demo Employee",
+  "isActive": true
+}
+
+###
+
+# @name Runtime PATCH (package procedure update — if update contract published)
+PUT {{baseUrl}}/api/employees
+Content-Type: application/json
+
+{
+  "employeeId": 1001,
+  "employeeName": "Demo Employee Updated"
+}
+
+###############################################################################
+# 9. RUNTIME — DIRECT TABLE WRITE
+# Requires a direct-table-write contract to be published for /employee-master.
+# See src/bridge/examples/direct-table-write-contract.json.
+###############################################################################
+
+# @name Runtime POST (direct table create)
+# Executes a parameterised INSERT. Returns the generated primary key.
+POST {{baseUrl}}/api/employee-master
+Content-Type: application/json
+
+{
+  "employeeCode": "EMP-DIRECT-001",
+  "employeeName": "Direct Employee",
+  "isActive": true
+}
+
+###
+
+# @name Runtime PATCH (direct table update)
+# Executes a parameterised UPDATE WHERE pk = :id.
+# Replace 1001 with a real primary key value.
+PATCH {{baseUrl}}/api/employee-master/1001
+Content-Type: application/json
+
+{
+  "employeeName": "Direct Employee Updated"
+}
+
+###############################################################################
+# 10. RUNTIME — SYS_REFCURSOR READ
+# Requires a SYS_REFCURSOR contract published for /employees/search.
+# See src/bridge/examples/sys-refcursor-read-contract.json.
+###############################################################################
+
+# @name Runtime GET SYS_REFCURSOR list
+# Calls PKG_EMPLOYEE_API.GET_EMPLOYEES, iterates the cursor, returns mapped rows.
+# Response: { data: [...] } or { data: [...], truncated: true } if cursor exceeds maxLimit.
+GET {{baseUrl}}/api/employees/search
+Content-Type: application/json
+
+###############################################################################
+# 11. DRIFT CHECK
+###############################################################################
+
+# @name Check Drift
+# Compares the published contract against the current Oracle schema snapshot.
+# Does NOT modify the contract or the runtime cache.
+# Expect: { data: { status: "healthy|drifted|broken|warning", findings: [...] } }
+POST {{baseUrl}}/bridge/contracts/published/{{publishedContractId}}/check-drift
+x-admin-api-key: {{adminApiKey}}
+
+###############################################################################
+# 12. DIAGNOSTICS
+###############################################################################
+
+# @name Get Compiler Diagnostics for Draft
+GET {{baseUrl}}/bridge/diagnostics/compiler?draftId={{draftId}}
+x-admin-api-key: {{adminApiKey}}
+
+###
+
+# @name Get All Audit Logs (last 100)
+GET {{baseUrl}}/bridge/diagnostics/audit
+x-admin-api-key: {{adminApiKey}}
+
+###
+
+# @name Get Audit Logs by Event Type
+GET {{baseUrl}}/bridge/diagnostics/audit?type=runtime.oracle.error&take=20
+x-admin-api-key: {{adminApiKey}}
+
+###############################################################################
+# 13. RETIRE
+###############################################################################
+
+# @name Retire Published Contract
+# Marks the contract as retired, writes a history record, and evicts it from the
+# runtime cache immediately. Subsequent /api/* requests return 404.
+# Idempotent — repeating on an already-retired contract is safe.
+POST {{baseUrl}}/bridge/contracts/published/{{publishedContractId}}/retire
+x-admin-api-key: {{adminApiKey}}
+Content-Type: application/json
+
+{
+  "retiredBy": "your-name",
+  "notes": "Replaced by v2 contract"
+}
+
+###
+
+# @name Verify Retired (should return 404)
+GET {{baseUrl}}/api/employees
+Content-Type: application/json
 
 ###

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm --filter @project-bridge/api typecheck)",
+      "Bash(git -C /home/ajay/workspace/project-bridge check-ignore -v .env)",
+      "Bash(git -C /home/ajay/workspace/project-bridge check-ignore -v apps/api/.env.example)",
+      "Bash(pnpm --filter @project-bridge/api test --run)"
+    ]
+  }
+}
