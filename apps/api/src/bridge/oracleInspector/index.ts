@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   OracleAdapterConnectionConfig,
   OracleConnectionRecord,
@@ -89,6 +90,7 @@ export type StoredOracleSchemaSnapshot = {
   apiConnectionId: string;
   oracleOwner: string;
   snapshotData: OracleSchemaSnapshot;
+  contentHash: string | null;
   capturedAt: Date;
   capturedBy: string | null;
 };
@@ -100,6 +102,7 @@ export type OracleSchemaInspectorStore = OracleConnectionRegistryStore & {
         apiConnectionId: string;
         oracleOwner: string;
         snapshotData: OracleSchemaSnapshot;
+        contentHash?: string;
         capturedBy?: string;
       };
     }): Promise<StoredOracleSchemaSnapshot>;
@@ -453,11 +456,14 @@ export function createOracleSchemaInspector(options: OracleSchemaInspectorOption
           programUnits: mapProgramUnits(procedureResult.rows, argumentResult.rows, programStatusResult.rows)
         };
 
+        const contentHash = createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
+
         const storedSnapshot = await options.store.oracleSchemaSnapshot.create({
           data: {
             apiConnectionId: connectionId,
             oracleOwner: normalizedOwner,
             snapshotData: snapshot,
+            contentHash,
             capturedBy: options.capturedBy
           }
         });

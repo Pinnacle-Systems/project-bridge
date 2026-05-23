@@ -50,3 +50,46 @@ Content-Type: application/json
   "owner": "PSSBSA"
 }
 ###
+
+@snapshot_id=<snapshot-id-from-inspect>
+
+# @name List snapshots
+GET {{host}}/bridge/schema-snapshots
+x-admin-api-key: bridge-admin
+
+###
+# @name Get snapshot summary
+GET {{host}}/bridge/schema-snapshots/{{snapshot_id}}
+x-admin-api-key: bridge-admin
+
+###
+# @name List objects (tables/views)
+GET {{host}}/bridge/schema-snapshots/{{snapshot_id}}/objects
+x-admin-api-key: bridge-admin
+
+###
+# @name Get object detail (columns, constraints, indexes)
+GET {{host}}/bridge/schema-snapshots/{{snapshot_id}}/objects/SOME_TABLE
+x-admin-api-key: bridge-admin
+
+###
+# @name List sequences
+GET {{host}}/bridge/schema-snapshots/{{snapshot_id}}/sequences
+x-admin-api-key: bridge-admin
+
+###
+# @name List program units (procedures/functions/packages)
+GET {{host}}/bridge/schema-snapshots/{{snapshot_id}}/program-units
+x-admin-api-key: bridge-admin
+
+###
+# @name Get program unit detail (with arguments)
+GET {{host}}/bridge/schema-snapshots/{{snapshot_id}}/program-units/SOME_PROC
+x-admin-api-key: bridge-admin
+
+###
+# @name Get package member detail (disambiguate with ?package=)
+GET {{host}}/bridge/schema-snapshots/{{snapshot_id}}/program-units/SOME_PROC?package=SOME_PKG
+x-admin-api-key: bridge-admin
+
+###

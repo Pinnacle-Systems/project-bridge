@@ -36,6 +36,10 @@ export type BridgeAdminStore = {
       orderBy?: { capturedAt?: "asc" | "desc" };
     }): Promise<StoredOracleSchemaSnapshot[]>;
     findUnique(args: { where: { id: string } }): Promise<StoredOracleSchemaSnapshot | null>;
+    findFirst(args?: {
+      where?: { apiConnectionId?: string; oracleOwner?: string };
+      orderBy?: { capturedAt?: "asc" | "desc" };
+    }): Promise<StoredOracleSchemaSnapshot | null>;
   };
   publishedContract: {
     findMany(args?: {

@@ -28,7 +28,7 @@ Resolved Runtime Contract
 Safe API Execution
 ```
 
-The original design already established important foundations: schema inspection, admin-defined API contracts, dynamic validations, execution pipeline, and DB error translation. This complete version keeps those ideas and adapts them specifically for Oracle legacy environments. 
+The original design already established important foundations: schema inspection, admin-defined API contracts, dynamic validations, execution pipeline, and DB error translation. This complete version keeps those ideas and adapts them specifically for Oracle legacy environments.
 
 ---
 
@@ -204,6 +204,22 @@ api_audit_logs
 schema_drift_reports
 compiler_diagnostics
 ```
+
+### oracle_schema_snapshots
+
+Key columns:
+
+```text
+id                UUID PRIMARY KEY
+api_connection_id UUID (FK → api_connections)
+oracle_owner      VARCHAR(100)
+snapshot_data     JSONB           — full inspection payload
+content_hash      VARCHAR(64)     — SHA-256 of snapshot_data, used for change detection
+captured_at       TIMESTAMPTZ
+captured_by       VARCHAR(100)
+```
+
+`content_hash` is computed from `JSON.stringify(snapshot)` before insert. Comparing the hash of a new snapshot against the previous one lets the API surface `changed: false` without requiring the caller to diff two large payloads.
 
 ## 5.4 Published Contracts Table
 
@@ -437,6 +453,79 @@ object validity status
     }
   ]
 }
+```
+
+## 7.4 Schema Snapshot Admin API
+
+Inspecting a schema creates a persisted `OracleSchemaSnapshot` record. Because snapshots can be large (hundreds of tables with full column/constraint/index detail), the API exposes them as a hierarchy of resources rather than returning the entire blob in one response.
+
+### Trigger an inspection
+
+```http
+POST /bridge/connections/:id/inspect
+Body: { "owner": "PSSBSA" }
+```
+
+Response — `201 Created` with a `Location` header pointing to the new snapshot:
+
+```http
+Location: /bridge/schema-snapshots/<new-id>
+```
+
+```json
+{
+  "data": {
+    "id": "...",
+    "apiConnectionId": "...",
+    "oracleOwner": "PSSBSA",
+    "capturedAt": "2026-05-23T04:50:00.000Z",
+    "capturedBy": null,
+    "changed": true,
+    "previousSnapshotId": "abc-123" | null,
+    "summary": {
+      "objects": 42,
+      "sequences": 5,
+      "programUnits": 18
+    }
+  }
+}
+```
+
+`changed: false` means the SHA-256 of the new snapshot matches the previous one for the same connection and owner. The snapshot is still created — preserving the audit trail that a check occurred — but the caller knows the schema has not moved and does not need to re-inspect contracts.
+
+### Snapshot resource hierarchy
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /bridge/schema-snapshots` | All snapshots, slim metadata + summary counts |
+| `GET /bridge/schema-snapshots/:id` | One snapshot, slim metadata + summary counts |
+| `GET /bridge/schema-snapshots/:id/objects` | All tables/views with column/constraint/index counts (no detail) |
+| `GET /bridge/schema-snapshots/:id/objects/:name` | One object with full columns, constraints, and indexes |
+| `GET /bridge/schema-snapshots/:id/sequences` | All sequences |
+| `GET /bridge/schema-snapshots/:id/program-units` | All program units with argument count (no argument detail) |
+| `GET /bridge/schema-snapshots/:id/program-units/:name` | One program unit with full argument list; use `?package=PKG` to disambiguate package members |
+
+The list endpoints (`/objects`, `/program-units`) return only summary fields so that browsing a large schema is fast. Callers drill into individual objects or program units only when they need the full detail for contract authoring.
+
+### Design rationale
+
+```text
+Always create a new snapshot on inspect:
+  Preserves the audit trail — you can see when checks were run
+  and whether the schema was stable between them.
+
+Use content_hash for change signalling, not deduplication:
+  The expensive Oracle query has already run by the time we compare.
+  Creating a new record is cheap. "changed: false" is useful signal.
+
+Return Location on 201:
+  Standard REST — the caller can follow the link without
+  hardcoding the snapshot URL pattern.
+
+Sub-resource hierarchy instead of one fat response:
+  A real schema (hundreds of tables, each with constraints and indexes)
+  makes the full snapshot payload impractical as a single response.
+  The hierarchy lets admin tooling browse incrementally.
 ```
 
 ---
@@ -744,7 +833,7 @@ The Oracle read mapper should apply transformations in this order:
 
 The validation model remains layered.
 
-The uploaded design correctly identified that database constraints alone are not enough for user-friendly API validation, and that dynamic validation should sit above DB execution. 
+The uploaded design correctly identified that database constraints alone are not enough for user-friendly API validation, and that dynamic validation should sit above DB execution.
 
 ## 12.1 Validation Layers
 
@@ -1390,7 +1479,7 @@ If affected rows = `0`, return:
 
 ## 21.1 Why It Matters
 
-Raw Oracle errors are often cryptic and may leak internal schema details. The design should translate database errors into clean API errors, which was also called out in the original dynamic validation design. 
+Raw Oracle errors are often cryptic and may leak internal schema details. The design should translate database errors into clean API errors, which was also called out in the original dynamic validation design.
 
 ## 21.2 Common Oracle Error Mapping
 

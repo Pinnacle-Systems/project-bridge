@@ -99,6 +99,7 @@ function fakeSnapshot(connectionId = "conn-1"): StoredOracleSchemaSnapshot {
     apiConnectionId: connectionId,
     oracleOwner: "HR",
     snapshotData: snap,
+    contentHash: null,
     capturedAt: NOW,
     capturedBy: null
   };
@@ -165,7 +166,8 @@ function makeCtx(overrides: Partial<BridgeHttpContext> = {}): BridgeHttpContext 
     store: {
       oracleSchemaSnapshot: {
         findMany:  vi.fn().mockResolvedValue([fakeSnapshot()]),
-        findUnique: vi.fn().mockResolvedValue(fakeSnapshot())
+        findUnique: vi.fn().mockResolvedValue(fakeSnapshot()),
+        findFirst: vi.fn().mockResolvedValue(null)
       },
       publishedContract: {
         findMany:  vi.fn().mockResolvedValue([storedPublished()]),
@@ -361,7 +363,7 @@ describe("Admin flows", () => {
         reloadAllContracts: vi.fn()
       },
       store: {
-        oracleSchemaSnapshot: { findMany: storeQuerySpy, findUnique: storeQuerySpy },
+        oracleSchemaSnapshot: { findMany: storeQuerySpy, findUnique: storeQuerySpy, findFirst: storeQuerySpy },
         publishedContract:    { findMany: storeQuerySpy, findUnique: storeQuerySpy },
         compilerDiagnostic:   { findMany: storeQuerySpy },
         auditLog:             { findMany: storeQuerySpy }

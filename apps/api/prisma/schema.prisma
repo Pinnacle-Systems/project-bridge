@@ -22,7 +22,7 @@ model ApiConnection {
   walletPath      String?                @map("wallet_path") @db.VarChar(500)
   walletSecretRef String?                @map("wallet_secret_ref") @db.VarChar(500)
   defaultOwner    String?                @map("default_owner") @db.VarChar(100)
-  oracleVersion   String?                @map("oracle_version") @db.VarChar(50)
+  oracleVersion   String?                @map("oracle_version") @db.VarChar(255)
   paginationStrategy String?             @map("pagination_strategy") @db.VarChar(30)
   status          String                 @default("unverified") @db.VarChar(30)
   createdAt       DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -42,12 +42,14 @@ model OracleSchemaSnapshot {
   apiConnectionId String        @map("api_connection_id") @db.Uuid
   oracleOwner     String        @map("oracle_owner") @db.VarChar(100)
   snapshotData    Json          @map("snapshot_data") @db.JsonB
+  contentHash     String?       @map("content_hash") @db.VarChar(64)
   capturedAt      DateTime      @default(now()) @map("captured_at") @db.Timestamptz(6)
   capturedBy      String?       @map("captured_by") @db.VarChar(100)
   apiConnection   ApiConnection @relation(fields: [apiConnectionId], references: [id], onDelete: Cascade)
 
   @@index([apiConnectionId])
   @@index([oracleOwner])
+  @@index([apiConnectionId, oracleOwner, contentHash])
   @@map("oracle_schema_snapshots")
 }
 

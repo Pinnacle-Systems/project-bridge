@@ -1,5 +1,5 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
-import { createAdminHandlers, type AdminHandlers } from "./admin-handlers.js";
+import { createAdminHandlers, type AdminHandlers, type AdminHandlerOutput } from "./admin-handlers.js";
 import type { BridgeHttpContext } from "./context.js";
 import { badRequest } from "../../error-handler.js";
 
@@ -7,11 +7,16 @@ function wire(
   router: Router,
   method: "get" | "post" | "put" | "patch" | "delete",
   path: string,
-  fn: (req: Request) => Promise<{ status: number; body: unknown }>
+  fn: (req: Request) => Promise<AdminHandlerOutput>
 ): void {
   router[method](path, async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { status, body } = await fn(req);
+      const { status, body, headers } = await fn(req);
+      if (headers) {
+        for (const [key, value] of Object.entries(headers)) {
+          res.setHeader(key, value);
+        }
+      }
       res.status(status).json(body);
     } catch (error) {
       next(error);
@@ -85,8 +90,13 @@ export function createAdminRouter(ctx: BridgeHttpContext): Router {
   wire(router, "post",   "/connections/:id/inspect",           req => h.inspectSchema(uuidParam(req.params.id), req.body));
 
   // ── Schema snapshots ───────────────────────────────────────────────────────
-  wire(router, "get",    "/schema-snapshots",                  req => h.listSnapshots(optionalUuidQuery(req.query.connectionId, "connectionId")));
-  wire(router, "get",    "/schema-snapshots/:id",              req => h.getSnapshot(uuidParam(req.params.id)));
+  wire(router, "get",    "/schema-snapshots",                        req => h.listSnapshots(optionalUuidQuery(req.query.connectionId, "connectionId")));
+  wire(router, "get",    "/schema-snapshots/:id",                    req => h.getSnapshot(uuidParam(req.params.id)));
+  wire(router, "get",    "/schema-snapshots/:id/objects",            req => h.listSnapshotObjects(uuidParam(req.params.id)));
+  wire(router, "get",    "/schema-snapshots/:id/objects/:name",      req => h.getSnapshotObject(uuidParam(req.params.id), routeParam(req.params.name)));
+  wire(router, "get",    "/schema-snapshots/:id/sequences",          req => h.listSnapshotSequences(uuidParam(req.params.id)));
+  wire(router, "get",    "/schema-snapshots/:id/program-units",      req => h.listSnapshotProgramUnits(uuidParam(req.params.id)));
+  wire(router, "get",    "/schema-snapshots/:id/program-units/:name",req => h.getSnapshotProgramUnit(uuidParam(req.params.id), routeParam(req.params.name), queryString(req.query.package)));
 
   // ── Draft contracts ────────────────────────────────────────────────────────
   wire(router, "post",   "/contracts/drafts",                  req => h.createDraft(bodyWithUuidField(req.body, "apiConnectionId")));

@@ -1,8 +1,9 @@
 import type { BridgeHttpContext } from "./context.js";
 import type { CreateOracleConnectionInput } from "../connections/index.js";
 import type { DraftApiContract } from "../contracts/index.js";
+import type { OracleSchemaSnapshot } from "../oracleInspector/index.js";
 
-export type AdminHandlerOutput = { status: number; body: unknown };
+export type AdminHandlerOutput = { status: number; body: unknown; headers?: Record<string, string> };
 
 export type AdminHandlers = {
   // Connections
@@ -15,6 +16,11 @@ export type AdminHandlers = {
   inspectSchema(connectionId: string, body: unknown): Promise<AdminHandlerOutput>;
   listSnapshots(connectionId?: string): Promise<AdminHandlerOutput>;
   getSnapshot(id: string): Promise<AdminHandlerOutput>;
+  listSnapshotObjects(id: string): Promise<AdminHandlerOutput>;
+  getSnapshotObject(id: string, objectName: string): Promise<AdminHandlerOutput>;
+  listSnapshotSequences(id: string): Promise<AdminHandlerOutput>;
+  listSnapshotProgramUnits(id: string): Promise<AdminHandlerOutput>;
+  getSnapshotProgramUnit(id: string, name: string, packageName?: string): Promise<AdminHandlerOutput>;
   // Drafts
   createDraft(body: unknown): Promise<AdminHandlerOutput>;
   getDraft(id: string): Promise<AdminHandlerOutput>;
@@ -78,8 +84,37 @@ export function createAdminHandlers(ctx: BridgeHttpContext): AdminHandlers {
     async inspectSchema(connectionId, body) {
       const { owner } = (body ?? {}) as { owner?: string };
       if (!owner) return { status: 400, body: { error: "owner is required." } };
+
+      const previous = await ctx.store.oracleSchemaSnapshot.findFirst({
+        where: { apiConnectionId: connectionId, oracleOwner: owner.trim().toUpperCase() },
+        orderBy: { capturedAt: "desc" }
+      });
+
       const result = await ctx.inspector.inspectOracleSchema(connectionId, owner);
-      return { status: 201, body: { data: result.storedSnapshot } };
+      const { storedSnapshot } = result;
+      const snap = storedSnapshot.snapshotData as OracleSchemaSnapshot;
+      const changed = !previous || previous.contentHash !== storedSnapshot.contentHash;
+
+      return {
+        status: 201,
+        headers: { Location: `/bridge/schema-snapshots/${storedSnapshot.id}` },
+        body: {
+          data: {
+            id: storedSnapshot.id,
+            apiConnectionId: storedSnapshot.apiConnectionId,
+            oracleOwner: storedSnapshot.oracleOwner,
+            capturedAt: storedSnapshot.capturedAt,
+            capturedBy: storedSnapshot.capturedBy,
+            changed,
+            previousSnapshotId: previous?.id ?? null,
+            summary: {
+              objects: snap.objects.length,
+              sequences: snap.sequences.length,
+              programUnits: snap.programUnits.length
+            }
+          }
+        }
+      };
     },
 
     async listSnapshots(connectionId) {
@@ -87,13 +122,117 @@ export function createAdminHandlers(ctx: BridgeHttpContext): AdminHandlers {
         where: connectionId ? { apiConnectionId: connectionId } : undefined,
         orderBy: { capturedAt: "desc" }
       });
-      return { status: 200, body: { data: snapshots } };
+      return {
+        status: 200,
+        body: {
+          data: snapshots.map(s => {
+            const snap = s.snapshotData as OracleSchemaSnapshot;
+            return {
+              id: s.id,
+              apiConnectionId: s.apiConnectionId,
+              oracleOwner: s.oracleOwner,
+              capturedAt: s.capturedAt,
+              capturedBy: s.capturedBy,
+              summary: {
+                objects: snap.objects.length,
+                sequences: snap.sequences.length,
+                programUnits: snap.programUnits.length
+              }
+            };
+          })
+        }
+      };
     },
 
     async getSnapshot(id) {
-      const snapshot = await ctx.store.oracleSchemaSnapshot.findUnique({ where: { id } });
-      if (!snapshot) return { status: 404, body: { error: "Snapshot not found." } };
-      return { status: 200, body: { data: snapshot } };
+      const s = await ctx.store.oracleSchemaSnapshot.findUnique({ where: { id } });
+      if (!s) return { status: 404, body: { error: "Snapshot not found." } };
+      const snap = s.snapshotData as OracleSchemaSnapshot;
+      return {
+        status: 200,
+        body: {
+          data: {
+            id: s.id,
+            apiConnectionId: s.apiConnectionId,
+            oracleOwner: s.oracleOwner,
+            capturedAt: s.capturedAt,
+            capturedBy: s.capturedBy,
+            summary: {
+              objects: snap.objects.length,
+              sequences: snap.sequences.length,
+              programUnits: snap.programUnits.length
+            }
+          }
+        }
+      };
+    },
+
+    async listSnapshotObjects(id) {
+      const s = await ctx.store.oracleSchemaSnapshot.findUnique({ where: { id } });
+      if (!s) return { status: 404, body: { error: "Snapshot not found." } };
+      const snap = s.snapshotData as OracleSchemaSnapshot;
+      return {
+        status: 200,
+        body: {
+          data: snap.objects.map(o => ({
+            owner: o.owner,
+            objectName: o.objectName,
+            objectType: o.objectType,
+            objectStatus: o.objectStatus,
+            columnCount: o.columns.length,
+            constraintCount: o.constraints.length,
+            indexCount: o.indexes.length
+          }))
+        }
+      };
+    },
+
+    async getSnapshotObject(id, objectName) {
+      const s = await ctx.store.oracleSchemaSnapshot.findUnique({ where: { id } });
+      if (!s) return { status: 404, body: { error: "Snapshot not found." } };
+      const snap = s.snapshotData as OracleSchemaSnapshot;
+      const obj = snap.objects.find(o => o.objectName.toUpperCase() === objectName.toUpperCase());
+      if (!obj) return { status: 404, body: { error: `Object '${objectName}' not found in snapshot.` } };
+      return { status: 200, body: { data: obj } };
+    },
+
+    async listSnapshotSequences(id) {
+      const s = await ctx.store.oracleSchemaSnapshot.findUnique({ where: { id } });
+      if (!s) return { status: 404, body: { error: "Snapshot not found." } };
+      const snap = s.snapshotData as OracleSchemaSnapshot;
+      return { status: 200, body: { data: snap.sequences } };
+    },
+
+    async listSnapshotProgramUnits(id) {
+      const s = await ctx.store.oracleSchemaSnapshot.findUnique({ where: { id } });
+      if (!s) return { status: 404, body: { error: "Snapshot not found." } };
+      const snap = s.snapshotData as OracleSchemaSnapshot;
+      return {
+        status: 200,
+        body: {
+          data: snap.programUnits.map(u => ({
+            owner: u.owner,
+            packageName: u.packageName,
+            name: u.name,
+            unitType: u.unitType,
+            objectStatus: u.objectStatus,
+            argumentCount: u.arguments.length,
+            returnType: u.returnType
+          }))
+        }
+      };
+    },
+
+    async getSnapshotProgramUnit(id, name, packageName) {
+      const s = await ctx.store.oracleSchemaSnapshot.findUnique({ where: { id } });
+      if (!s) return { status: 404, body: { error: "Snapshot not found." } };
+      const snap = s.snapshotData as OracleSchemaSnapshot;
+      const unit = snap.programUnits.find(u =>
+        u.name.toUpperCase() === name.toUpperCase() &&
+        (packageName === undefined || (u.packageName ?? "").toUpperCase() === packageName.toUpperCase())
+      );
+      if (!unit) return { status: 404, body: { error: `Program unit '${name}' not found in snapshot.` } };
+      return { status: 200, body: { data: unit } };
     },
 
     // ── Drafts ───────────────────────────────────────────────────────────────

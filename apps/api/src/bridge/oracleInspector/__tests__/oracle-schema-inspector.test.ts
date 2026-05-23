@@ -62,6 +62,7 @@ function createStore(record: OracleConnectionRecord) {
           apiConnectionId: data.apiConnectionId,
           oracleOwner: data.oracleOwner,
           snapshotData: data.snapshotData,
+          contentHash: data.contentHash ?? null,
           capturedAt: new Date("2026-05-06T00:00:00.000Z"),
           capturedBy: data.capturedBy ?? null
         };
