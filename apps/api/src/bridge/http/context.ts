@@ -47,6 +47,30 @@ export type BridgeAdminStore = {
       orderBy?: { version?: "asc" | "desc" };
     }): Promise<StoredPublishedContract[]>;
     findUnique(args: { where: { id: string } }): Promise<StoredPublishedContract | null>;
+    update(args: {
+      where: { id: string };
+      data: { status: string };
+    }): Promise<StoredPublishedContract>;
+  };
+  contractPublishHistory: {
+    create(args: {
+      data: {
+        publishedContractId: string;
+        action: string;
+        actor?: string;
+        notes?: string;
+      };
+    }): Promise<unknown>;
+  };
+  schemaDriftReport: {
+    create(args: {
+      data: {
+        publishedContractId: string;
+        severity: string;
+        status: string;
+        reportData: unknown;
+      };
+    }): Promise<import("../drift/index.js").StoredDriftReport>;
   };
   compilerDiagnostic: {
     findMany(args?: {

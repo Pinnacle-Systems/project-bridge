@@ -131,7 +131,6 @@ function validateSource(value: unknown, path: string, issues: ContractValidation
     return;
   }
 
-  requireString(value, "database", issues, path);
   requireString(value, "owner", issues, path);
   requireEnum(value, "type", sourceTypes, issues, path);
 
@@ -269,6 +268,9 @@ function validateRuntime(value: unknown, path: string, issues: ContractValidatio
 
   requireString(value, "cacheKey", issues, path);
   requireString(value, "schemaVersion", issues, path);
+  if ("apiConnectionId" in value && value.apiConnectionId !== undefined) {
+    requireString(value, "apiConnectionId", issues, path);
+  }
   if ("loadedAt" in value && value.loadedAt !== undefined && !isDateLike(value.loadedAt)) {
     issues.push({ path: `${path}.loadedAt`, message: "loadedAt must be a Date or ISO date string." });
   }

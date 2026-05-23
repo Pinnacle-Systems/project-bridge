@@ -158,6 +158,44 @@ describe("CursorReadHandler", () => {
     expect((body as any).data[0].name).toBe("Carol");
   });
 
+  it("maps uppercase cursor row keys when contract dbColumn is lowercase.", async () => {
+    const contract = makeContract({
+      sysRefCursor: {
+        paramName: "P_RESULT",
+        fields: [
+          { apiField: "id", apiType: "integer", oracleType: "number", dbColumn: "employee_id" },
+          { apiField: "name", apiType: "string", oracleType: "varchar2", dbColumn: "employee_name" }
+        ]
+      }
+    });
+    const cursor = makeCursor([{ EMPLOYEE_ID: 7, EMPLOYEE_NAME: "Dana" }]);
+    const handle = createCursorReadHandler(makeCtx(cursor, { cache: makeCache(contract) }));
+
+    const { status, body } = await handle({ contractPath: "/api/hr/employees" });
+
+    expect(status).toBe(200);
+    expect((body as any).data).toEqual([{ id: 7, name: "Dana" }]);
+  });
+
+  it("maps lowercase cursor row keys when contract dbColumn is uppercase.", async () => {
+    const contract = makeContract({
+      sysRefCursor: {
+        paramName: "P_RESULT",
+        fields: [
+          { apiField: "id", apiType: "integer", oracleType: "number", dbColumn: "EMPLOYEE_ID" },
+          { apiField: "name", apiType: "string", oracleType: "varchar2", dbColumn: "EMPLOYEE_NAME" }
+        ]
+      }
+    });
+    const cursor = makeCursor([{ employee_id: 8, employee_name: "Eli" }]);
+    const handle = createCursorReadHandler(makeCtx(cursor, { cache: makeCache(contract) }));
+
+    const { status, body } = await handle({ contractPath: "/api/hr/employees" });
+
+    expect(status).toBe(200);
+    expect((body as any).data).toEqual([{ id: 8, name: "Eli" }]);
+  });
+
   it("3. Boolean transformer applies to cursor row values.", async () => {
     const cursor = makeCursor([
       { EMPLOYEE_ID: 4, FULL_NAME: "Dave", IS_ACTIVE: "Y" },

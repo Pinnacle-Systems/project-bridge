@@ -79,7 +79,7 @@ describe("ReadHandler", () => {
     });
   });
 
-  it("2. GET by id works.", async () => {
+  it("2. GET by id works when the PK API field is id.", async () => {
     const adapter = makeAdapter([{ EMPLOYEE_ID: 42, FULL_NAME: "Carol" }]);
     const handle = createReadHandler(makeCtx({ adapter }));
 
@@ -87,6 +87,48 @@ describe("ReadHandler", () => {
 
     expect(status).toBe(200);
     expect(body).toEqual({ data: { id: 42, name: "Carol" } });
+  });
+
+  it("GET by id works when the PK API field is employeeId.", async () => {
+    const contract = makeContract({
+      fields: [
+        { apiField: "employeeId", apiType: "integer", oracleType: "number", dbColumn: "EMPLOYEE_ID", readOnly: true },
+        { apiField: "name", apiType: "string", oracleType: "varchar2", dbColumn: "FULL_NAME" }
+      ]
+    });
+    const adapter = makeAdapter([{ EMPLOYEE_ID: 42, FULL_NAME: "Carol" }]);
+    const handle = createReadHandler(makeCtx({ cache: makeCache(contract), adapter }));
+
+    const { status, body } = await handle({ contractPath: "/api/hr/employees", idParam: "42" });
+
+    expect(status).toBe(200);
+    expect(body).toEqual({ data: { employeeId: 42, name: "Carol" } });
+    expect(adapter.query).toHaveBeenCalledWith(
+      expect.stringContaining('"EMPLOYEE_ID" = :p1'),
+      expect.objectContaining({ p1: "42" }),
+      expect.objectContaining({ outFormat: "object" })
+    );
+  });
+
+  it("GET by id falls back to id when no PK metadata is available.", async () => {
+    const contract = makeContract({
+      fields: [
+        { apiField: "id", apiType: "integer", oracleType: "number", dbColumn: "EMPLOYEE_ID" },
+        { apiField: "name", apiType: "string", oracleType: "varchar2", dbColumn: "FULL_NAME" }
+      ]
+    });
+    const adapter = makeAdapter([{ EMPLOYEE_ID: 42, FULL_NAME: "Carol" }]);
+    const handle = createReadHandler(makeCtx({ cache: makeCache(contract), adapter }));
+
+    const { status, body } = await handle({ contractPath: "/api/hr/employees", idParam: "42" });
+
+    expect(status).toBe(200);
+    expect(body).toEqual({ data: { id: 42, name: "Carol" } });
+    expect(adapter.query).toHaveBeenCalledWith(
+      expect.stringContaining('"EMPLOYEE_ID" = :p1'),
+      expect.objectContaining({ p1: "42" }),
+      expect.objectContaining({ outFormat: "object" })
+    );
   });
 
   it("3. Unknown filter returns 400.", async () => {

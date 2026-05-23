@@ -129,6 +129,7 @@ export function createOracleAwareContractCompiler(store: ContractCompilerStore):
             sourceObject?.objectStatus === "VALID" || programUnit?.objectStatus === "VALID" ? "valid" : "unknown"
         },
         runtime: {
+          apiConnectionId: input.apiConnectionId,
           cacheKey: `${input.draft.endpoint}:v${input.version ?? 1}`,
           schemaVersion: SCHEMA_VERSION
         }

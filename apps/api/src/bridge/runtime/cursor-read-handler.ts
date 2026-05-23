@@ -309,13 +309,21 @@ function mapCursorRow(
   const result: Record<string, unknown> = {};
   for (const field of fields) {
     const dbKey = field.dbColumn ?? field.apiField;
-    const transformed = transformReadValue(row[dbKey], field);
+    const transformed = transformReadValue(getCaseInsensitiveValue(row, dbKey), field);
     const masked = applyReadPermissionMask(transformed, field, allowedFields);
     if (masked !== undefined) {
       result[field.apiField] = masked;
     }
   }
   return result;
+}
+
+function getCaseInsensitiveValue(row: Record<string, unknown>, key: string): unknown {
+  if (Object.prototype.hasOwnProperty.call(row, key)) {
+    return row[key];
+  }
+  const matchingKey = Object.keys(row).find(candidate => candidate.toLowerCase() === key.toLowerCase());
+  return matchingKey === undefined ? undefined : row[matchingKey];
 }
 
 /** Close a cursor, swallowing any error so callers don't mask the original. */

@@ -2,6 +2,8 @@ import type { BridgeHttpContext } from "./context.js";
 import type { CreateOracleConnectionInput } from "../connections/index.js";
 import type { DraftApiContract } from "../contracts/index.js";
 import type { OracleSchemaSnapshot } from "../oracleInspector/index.js";
+import { buildContractAuditMetadata } from "../audit/index.js";
+import { createDriftService } from "../drift/index.js";
 
 export type AdminHandlerOutput = { status: number; body: unknown; headers?: Record<string, string> };
 
@@ -35,6 +37,8 @@ export type AdminHandlers = {
   // Published
   listPublished(): Promise<AdminHandlerOutput>;
   getPublished(id: string): Promise<AdminHandlerOutput>;
+  checkPublishedDrift(id: string): Promise<AdminHandlerOutput>;
+  retirePublished(id: string, body?: unknown): Promise<AdminHandlerOutput>;
   // Cache
   reloadCache(): Promise<AdminHandlerOutput>;
   getCacheStatus(): Promise<AdminHandlerOutput>;
@@ -329,6 +333,93 @@ export function createAdminHandlers(ctx: BridgeHttpContext): AdminHandlers {
       const contract = await ctx.store.publishedContract.findUnique({ where: { id } });
       if (!contract) return { status: 404, body: { error: "Published contract not found." } };
       return { status: 200, body: { data: contract } };
+    },
+
+    async checkPublishedDrift(id) {
+      const contract = await ctx.store.publishedContract.findUnique({ where: { id } });
+      if (!contract) return { status: 404, body: { error: "Published contract not found." } };
+
+      try {
+        const drift = createDriftService({
+          store: ctx.store,
+          getSnapshot: async (connectionId, owner) => {
+            const snapshot = await ctx.store.oracleSchemaSnapshot.findFirst({
+              where: { apiConnectionId: connectionId, oracleOwner: owner.toUpperCase() },
+              orderBy: { capturedAt: "desc" }
+            });
+            if (!snapshot) {
+              throw new Error("Schema snapshot not available.");
+            }
+            return snapshot.snapshotData as OracleSchemaSnapshot;
+          }
+        });
+        const report = await drift.runDriftCheck(id);
+        return {
+          status: 200,
+          body: {
+            data: {
+              id: report.id,
+              publishedContractId: report.publishedContractId,
+              status: report.reportData.status,
+              severity: report.severity,
+              findings: report.reportData.findings,
+              checkedAt: report.checkedAt
+            }
+          }
+        };
+      } catch {
+        return { status: 422, body: { error: "Drift check could not be completed." } };
+      }
+    },
+
+    async retirePublished(id, body) {
+      const contract = await ctx.store.publishedContract.findUnique({ where: { id } });
+      if (!contract) return { status: 404, body: { error: "Published contract not found." } };
+
+      const { retiredBy, notes } = (body ?? {}) as { retiredBy?: string; notes?: string };
+      const retired = contract.status === "retired"
+        ? contract
+        : await ctx.store.publishedContract.update({
+            where: { id },
+            data: { status: "retired" }
+          });
+
+      if (contract.status !== "retired") {
+        await ctx.store.contractPublishHistory.create({
+          data: {
+            publishedContractId: id,
+            action: "retired",
+            actor: retiredBy,
+            notes
+          }
+        });
+        ctx.audit?.log({
+          type: "contract.retired",
+          actor: retiredBy,
+          metadata: buildContractAuditMetadata({
+            resource: retired.resourceName,
+            endpoint: retired.endpointPath,
+            contractVersion: retired.version,
+            actor: retiredBy,
+            status: "retired"
+          })
+        });
+      }
+
+      await ctx.cache.reloadContract(id);
+
+      return {
+        status: 200,
+        body: {
+          data: {
+            id: retired.id,
+            resourceName: retired.resourceName,
+            version: retired.version,
+            endpointPath: retired.endpointPath,
+            status: retired.status
+          }
+        }
+      };
     },
 
     // ── Cache ────────────────────────────────────────────────────────────────

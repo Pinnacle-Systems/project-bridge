@@ -51,7 +51,7 @@ Content-Type: application/json
 }
 ###
 
-@snapshot_id=<snapshot-id-from-inspect>
+@snapshot_id=e71281cc-adfe-47c1-ae21-0d116b3739b6
 
 # @name List snapshots
 GET {{host}}/bridge/schema-snapshots
@@ -69,7 +69,7 @@ x-admin-api-key: bridge-admin
 
 ###
 # @name Get object detail (columns, constraints, indexes)
-GET {{host}}/bridge/schema-snapshots/{{snapshot_id}}/objects/SOME_TABLE
+GET {{host}}/bridge/schema-snapshots/{{snapshot_id}}/objects/YFPURREG
 x-admin-api-key: bridge-admin
 
 ###
@@ -84,12 +84,12 @@ x-admin-api-key: bridge-admin
 
 ###
 # @name Get program unit detail (with arguments)
-GET {{host}}/bridge/schema-snapshots/{{snapshot_id}}/program-units/SOME_PROC
+GET {{host}}/bridge/schema-snapshots/{{snapshot_id}}/program-units/ACCADDSHOBMDET
 x-admin-api-key: bridge-admin
 
 ###
 # @name Get package member detail (disambiguate with ?package=)
-GET {{host}}/bridge/schema-snapshots/{{snapshot_id}}/program-units/SOME_PROC?package=SOME_PKG
+GET {{host}}/bridge/schema-snapshots/{{snapshot_id}}/program-units/ACCADDSHOBMDET?package=SOME_PKG
 x-admin-api-key: bridge-admin
 
 ###

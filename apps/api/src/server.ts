@@ -106,6 +106,8 @@ const cache     = createContractCache(prisma as any);
 const store: BridgeHttpContext["store"] = {
   oracleSchemaSnapshot: prisma.oracleSchemaSnapshot as any,
   publishedContract:    prisma.publishedContract as any,
+  contractPublishHistory: prisma.contractPublishHistory as any,
+  schemaDriftReport: prisma.schemaDriftReport as any,
   compilerDiagnostic:   prisma.compilerDiagnostic as any,
   auditLog: {
     findMany: (args) => prisma.apiAuditLog.findMany({

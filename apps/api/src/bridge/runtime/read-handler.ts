@@ -1,6 +1,6 @@
 import type { ContractCache } from "../contracts/contract-cache.js";
 import type { OracleConnectorAdapter } from "../connections/oracle-adapter.js";
-import type { ApiFieldMapping, OraclePaginationStrategy } from "../contracts/index.js";
+import type { ApiFieldMapping, OraclePaginationStrategy, ResolvedApiContract } from "../contracts/index.js";
 import {
   buildRuntimeAuditMetadata,
   extractOracleErrorCode,
@@ -73,7 +73,7 @@ export function createReadHandler(ctx: ReadHandlerContext) {
     // Steps 5/6: Build query — validates filters, sorts, and pagination
     const filters: QueryRequestFilter[] = [...(input.filters ?? [])];
     if (input.idParam !== undefined) {
-      filters.push({ field: "id", operator: "eq", value: input.idParam });
+      filters.push({ field: resolvePrimaryKeyApiField(contract), operator: "eq", value: input.idParam });
     }
 
     let sql: string;
@@ -176,6 +176,24 @@ export function createReadHandler(ctx: ReadHandlerContext) {
     }
     return { status: 200, body: { data: mapped } };
   };
+}
+
+function resolvePrimaryKeyApiField(contract: ResolvedApiContract): string {
+  const primaryKey = (contract as ResolvedApiContract & { primaryKey?: { apiField?: unknown } }).primaryKey;
+  if (typeof primaryKey?.apiField === "string" && primaryKey.apiField.length > 0) {
+    return primaryKey.apiField;
+  }
+
+  const explicitPrimaryKeyField = contract.fields.find(field => {
+    const metadata = field as ApiFieldMapping & { primaryKey?: unknown; isPrimaryKey?: unknown };
+    return (metadata.primaryKey === true || metadata.isPrimaryKey === true) && metadata.apiField;
+  });
+  if (explicitPrimaryKeyField) {
+    return explicitPrimaryKeyField.apiField;
+  }
+
+  const readOnlyDbField = contract.fields.find(field => field.readOnly && field.dbColumn);
+  return readOnlyDbField?.apiField ?? "id";
 }
 
 function mapRow(

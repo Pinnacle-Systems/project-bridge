@@ -181,10 +181,10 @@ describe("ContractCache", () => {
     );
   });
 
-  it("7. reloadContract clears stale endpoint keys if endpoint changed.", async () => {
-    const data = validResolvedContractData({ endpoint: "/api/hr/old", id: "1" });
+  it("7. reloadContract clears stale endpoint keys by published contract row id.", async () => {
+    const data = validResolvedContractData({ endpoint: "/api/hr/old", id: "resolved-1" });
     const store = createMemoryStore([
-      { id: "1", endpointPath: "/api/hr/old", status: "active", contractData: data }
+      { id: "published-1", endpointPath: "/api/hr/old", status: "active", contractData: data }
     ]);
 
     const logger = { warn: vi.fn(), error: vi.fn() };
@@ -194,12 +194,12 @@ describe("ContractCache", () => {
     expect(cache.getContractByEndpoint("GET", "/api/hr/old")).toBeDefined();
 
     // Now update the database mock with new endpoint
-    const newData = validResolvedContractData({ endpoint: "/api/hr/new", id: "1" });
+    const newData = validResolvedContractData({ endpoint: "/api/hr/new", id: "resolved-1" });
     store.publishedContract.findUnique = async () => ({
-      id: "1", endpointPath: "/api/hr/new", status: "active", contractData: newData
+      id: "published-1", endpointPath: "/api/hr/new", status: "active", contractData: newData
     });
 
-    await cache.reloadContract("1");
+    await cache.reloadContract("published-1");
 
     // Old endpoint should be gone, new one should be present
     expect(cache.getContractByEndpoint("GET", "/api/hr/old")).toBeUndefined();
@@ -207,10 +207,10 @@ describe("ContractCache", () => {
 
     // Now set to inactive and verify cleanup
     store.publishedContract.findUnique = async () => ({
-      id: "1", endpointPath: "/api/hr/new", status: "retired", contractData: newData
+      id: "published-1", endpointPath: "/api/hr/new", status: "retired", contractData: newData
     });
 
-    await cache.reloadContract("1");
+    await cache.reloadContract("published-1");
     expect(cache.getContractByEndpoint("GET", "/api/hr/new")).toBeUndefined();
   });
 

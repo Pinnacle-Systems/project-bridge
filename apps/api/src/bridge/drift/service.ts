@@ -33,7 +33,8 @@ export function createDriftService(options: DriftServiceOptions): DriftService {
     }
 
     const contract = validation.data;
-    const snapshot = await getSnapshot(contract.source.database, contract.source.owner);
+    const connectionId = resolveContractConnectionId(contract.runtime.apiConnectionId, contract.id);
+    const snapshot = await getSnapshot(connectionId, contract.source.owner);
     const result = checkContractDrift(contract, snapshot);
 
     return store.schemaDriftReport.create({
@@ -65,4 +66,17 @@ export function createDriftService(options: DriftServiceOptions): DriftService {
   }
 
   return { runDriftCheck, runDriftCheckForAllActiveContracts };
+}
+
+function resolveContractConnectionId(runtimeConnectionId: string | undefined, contractId: string): string {
+  if (runtimeConnectionId) {
+    return runtimeConnectionId;
+  }
+
+  const [legacyConnectionId] = contractId.split(":");
+  if (legacyConnectionId) {
+    return legacyConnectionId;
+  }
+
+  throw new Error(`Contract ${contractId} is missing runtime apiConnectionId.`);
 }

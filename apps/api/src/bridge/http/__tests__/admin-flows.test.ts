@@ -105,6 +105,125 @@ function fakeSnapshot(connectionId = "conn-1"): StoredOracleSchemaSnapshot {
   };
 }
 
+function driftReadySnapshot(): StoredOracleSchemaSnapshot {
+  const snapshot = richSnapshot();
+  snapshot.snapshotData.objects = [
+    {
+      owner: "HR",
+      objectName: "EMPLOYEES",
+      objectType: "TABLE",
+      objectStatus: "VALID",
+      columns: [
+        {
+          name: "EMPLOYEE_ID",
+          oracleType: "NUMBER",
+          nullable: false,
+          dataLength: 22,
+          precision: 10,
+          scale: 0,
+          charLength: null,
+          dataDefault: null
+        }
+      ],
+      constraints: [],
+      indexes: []
+    }
+  ];
+  return snapshot;
+}
+
+function richSnapshot(id = "snap-1", contentHash = "hash-1"): StoredOracleSchemaSnapshot {
+  const snap: OracleSchemaSnapshot = {
+    connectionId: "conn-1",
+    owner: "HR",
+    inspectedAt: NOW.toISOString(),
+    objects: [
+      {
+        owner: "HR",
+        objectName: "EMPLOYEES",
+        objectType: "TABLE",
+        objectStatus: "VALID",
+        columns: [
+          {
+            name: "EMPLOYEE_ID",
+            oracleType: "NUMBER",
+            nullable: false,
+            dataLength: null,
+            precision: 10,
+            scale: 0,
+            charLength: null,
+            dataDefault: null
+          }
+        ],
+        constraints: [
+          {
+            name: "EMP_PK",
+            type: "PRIMARY_KEY",
+            columns: ["EMPLOYEE_ID"],
+            searchCondition: null,
+            referencedOwner: null,
+            referencedObjectName: null,
+            referencedConstraintName: null
+          }
+        ],
+        indexes: [
+          { name: "EMP_PK", unique: true, columns: ["EMPLOYEE_ID"] }
+        ]
+      },
+      {
+        owner: "HR",
+        objectName: "DEPARTMENTS",
+        objectType: "TABLE",
+        objectStatus: "VALID",
+        columns: [],
+        constraints: [],
+        indexes: []
+      }
+    ],
+    sequences: [
+      { owner: "HR", name: "EMP_SEQ" }
+    ],
+    programUnits: [
+      {
+        owner: "HR",
+        packageName: "PKG_EMP",
+        name: "LIST_EMPLOYEES",
+        unitType: "PACKAGE_PROCEDURE",
+        objectStatus: "VALID",
+        arguments: [
+          {
+            name: "P_RESULT",
+            position: 1,
+            direction: "OUT",
+            oracleType: "SYS_REFCURSOR",
+            isSysRefCursor: true
+          }
+        ],
+        returnType: null
+      },
+      {
+        owner: "HR",
+        packageName: null,
+        name: "PING",
+        unitType: "FUNCTION",
+        objectStatus: "VALID",
+        arguments: [],
+        returnType: "VARCHAR2"
+      }
+    ]
+  };
+
+  return {
+    id,
+    apiConnectionId: "conn-1",
+    oracleOwner: "HR",
+    snapshotData: snap,
+    contentHash,
+    capturedAt: NOW,
+    capturedBy: "tester"
+  };
+}
+
 // ─── Minimal mock context builder ─────────────────────────────────────────────
 
 function makeCtx(overrides: Partial<BridgeHttpContext> = {}): BridgeHttpContext {
@@ -171,7 +290,20 @@ function makeCtx(overrides: Partial<BridgeHttpContext> = {}): BridgeHttpContext 
       },
       publishedContract: {
         findMany:  vi.fn().mockResolvedValue([storedPublished()]),
-        findUnique: vi.fn().mockResolvedValue(storedPublished())
+        findUnique: vi.fn().mockResolvedValue(storedPublished()),
+        update: vi.fn().mockImplementation(async ({ data }) => ({ ...storedPublished(), ...data }))
+      },
+      contractPublishHistory: { create: vi.fn().mockResolvedValue({ id: "hist-1" }) },
+      schemaDriftReport: {
+        create: vi.fn().mockImplementation(async ({ data }) => ({
+          id: "drift-1",
+          publishedContractId: data.publishedContractId,
+          severity: data.severity,
+          status: data.status,
+          reportData: data.reportData,
+          checkedAt: NOW,
+          resolvedAt: null
+        }))
       },
       compilerDiagnostic: { findMany: vi.fn().mockResolvedValue([]) },
       auditLog:           { findMany: vi.fn().mockResolvedValue([]) }
@@ -364,7 +496,9 @@ describe("Admin flows", () => {
       },
       store: {
         oracleSchemaSnapshot: { findMany: storeQuerySpy, findUnique: storeQuerySpy, findFirst: storeQuerySpy },
-        publishedContract:    { findMany: storeQuerySpy, findUnique: storeQuerySpy },
+        publishedContract:    { findMany: storeQuerySpy, findUnique: storeQuerySpy, update: storeQuerySpy },
+        contractPublishHistory: { create: storeQuerySpy },
+        schemaDriftReport: { create: storeQuerySpy },
         compilerDiagnostic:   { findMany: storeQuerySpy },
         auditLog:             { findMany: storeQuerySpy }
       },
@@ -382,5 +516,371 @@ describe("Admin flows", () => {
     // Handler ran (not 404, not an error from the store spy)
     expect(result.status).not.toBe(404);
     expect(storeQuerySpy).not.toHaveBeenCalled();
+  });
+
+  it("13. inspectSchema marks the first snapshot as changed with no previous snapshot.", async () => {
+    const storedSnapshot = richSnapshot("snap-first", "hash-1");
+    const ctx = makeCtx({
+      inspector: {
+        inspectOracleSchema: vi.fn().mockResolvedValue({
+          snapshot: storedSnapshot.snapshotData,
+          storedSnapshot
+        })
+      },
+      store: {
+        ...makeCtx().store,
+        oracleSchemaSnapshot: {
+          ...makeCtx().store.oracleSchemaSnapshot,
+          findFirst: vi.fn().mockResolvedValue(null)
+        }
+      }
+    });
+    const result = await createAdminHandlers(ctx).inspectSchema("conn-1", { owner: "hr" });
+
+    expect(result.status).toBe(201);
+    expect(result.headers?.Location).toBe("/bridge/schema-snapshots/snap-first");
+    expect((result.body as any).data).toMatchObject({
+      id: "snap-first",
+      changed: true,
+      previousSnapshotId: null,
+      summary: { objects: 2, sequences: 1, programUnits: 2 }
+    });
+    expect(JSON.stringify(result.body)).not.toContain("snapshotData");
+  });
+
+  it("14. inspectSchema marks same contentHash as unchanged with previousSnapshotId.", async () => {
+    const storedSnapshot = richSnapshot("snap-new", "hash-1");
+    const previousSnapshot = richSnapshot("snap-old", "hash-1");
+    const ctx = makeCtx({
+      inspector: {
+        inspectOracleSchema: vi.fn().mockResolvedValue({
+          snapshot: storedSnapshot.snapshotData,
+          storedSnapshot
+        })
+      },
+      store: {
+        ...makeCtx().store,
+        oracleSchemaSnapshot: {
+          ...makeCtx().store.oracleSchemaSnapshot,
+          findFirst: vi.fn().mockResolvedValue(previousSnapshot)
+        }
+      }
+    });
+    const result = await createAdminHandlers(ctx).inspectSchema("conn-1", { owner: "HR" });
+
+    expect(result.status).toBe(201);
+    expect((result.body as any).data.changed).toBe(false);
+    expect((result.body as any).data.previousSnapshotId).toBe("snap-old");
+  });
+
+  it("15. inspectSchema marks different contentHash as changed with previousSnapshotId.", async () => {
+    const storedSnapshot = richSnapshot("snap-new", "hash-2");
+    const previousSnapshot = richSnapshot("snap-old", "hash-1");
+    const ctx = makeCtx({
+      inspector: {
+        inspectOracleSchema: vi.fn().mockResolvedValue({
+          snapshot: storedSnapshot.snapshotData,
+          storedSnapshot
+        })
+      },
+      store: {
+        ...makeCtx().store,
+        oracleSchemaSnapshot: {
+          ...makeCtx().store.oracleSchemaSnapshot,
+          findFirst: vi.fn().mockResolvedValue(previousSnapshot)
+        }
+      }
+    });
+    const result = await createAdminHandlers(ctx).inspectSchema("conn-1", { owner: "HR" });
+
+    expect(result.status).toBe(201);
+    expect((result.body as any).data.changed).toBe(true);
+    expect((result.body as any).data.previousSnapshotId).toBe("snap-old");
+  });
+
+  it("16. snapshot list and summary endpoints return slim data only.", async () => {
+    const snapshot = richSnapshot();
+    const ctx = makeCtx({
+      store: {
+        ...makeCtx().store,
+        oracleSchemaSnapshot: {
+          findMany: vi.fn().mockResolvedValue([snapshot]),
+          findUnique: vi.fn().mockResolvedValue(snapshot),
+          findFirst: vi.fn().mockResolvedValue(null)
+        }
+      }
+    });
+    const h = createAdminHandlers(ctx);
+
+    const list = await h.listSnapshots();
+    const summary = await h.getSnapshot("snap-1");
+    const objects = await h.listSnapshotObjects("snap-1");
+    const programUnits = await h.listSnapshotProgramUnits("snap-1");
+
+    expect(list.status).toBe(200);
+    expect(summary.status).toBe(200);
+    expect(objects.status).toBe(200);
+    expect(programUnits.status).toBe(200);
+    expect((list.body as any).data[0]).toMatchObject({ id: "snap-1", summary: { objects: 2 } });
+    expect((summary.body as any).data).toMatchObject({ id: "snap-1", summary: { programUnits: 2 } });
+    expect((objects.body as any).data[0]).toEqual({
+      owner: "HR",
+      objectName: "EMPLOYEES",
+      objectType: "TABLE",
+      objectStatus: "VALID",
+      columnCount: 1,
+      constraintCount: 1,
+      indexCount: 1
+    });
+    expect((programUnits.body as any).data[0]).toEqual({
+      owner: "HR",
+      packageName: "PKG_EMP",
+      name: "LIST_EMPLOYEES",
+      unitType: "PACKAGE_PROCEDURE",
+      objectStatus: "VALID",
+      argumentCount: 1,
+      returnType: null
+    });
+    expect(JSON.stringify([list.body, summary.body, objects.body, programUnits.body])).not.toContain("snapshotData");
+    expect(JSON.stringify(objects.body)).not.toContain("columns");
+    expect(JSON.stringify(programUnits.body)).not.toContain("arguments");
+  });
+
+  it("17. snapshot detail endpoints return only the selected object or program unit.", async () => {
+    const snapshot = richSnapshot();
+    const ctx = makeCtx({
+      store: {
+        ...makeCtx().store,
+        oracleSchemaSnapshot: {
+          findMany: vi.fn().mockResolvedValue([snapshot]),
+          findUnique: vi.fn().mockResolvedValue(snapshot),
+          findFirst: vi.fn().mockResolvedValue(null)
+        }
+      }
+    });
+    const h = createAdminHandlers(ctx);
+
+    const objectResult = await h.getSnapshotObject("snap-1", "employees");
+    const programUnitResult = await h.getSnapshotProgramUnit("snap-1", "LIST_EMPLOYEES", "PKG_EMP");
+    const functionResult = await h.getSnapshotProgramUnit("snap-1", "PING");
+
+    expect(objectResult.status).toBe(200);
+    expect((objectResult.body as any).data.objectName).toBe("EMPLOYEES");
+    expect((objectResult.body as any).data.columns).toHaveLength(1);
+    expect(JSON.stringify(objectResult.body)).not.toContain("DEPARTMENTS");
+    expect(programUnitResult.status).toBe(200);
+    expect((programUnitResult.body as any).data.name).toBe("LIST_EMPLOYEES");
+    expect((programUnitResult.body as any).data.arguments).toHaveLength(1);
+    expect(JSON.stringify(programUnitResult.body)).not.toContain("\"PING\"");
+    expect(functionResult.status).toBe(200);
+    expect((functionResult.body as any).data.name).toBe("PING");
+  });
+
+  it("18. snapshot sequences endpoint returns sequence summaries and no raw snapshotData.", async () => {
+    const snapshot = richSnapshot();
+    const ctx = makeCtx({
+      store: {
+        ...makeCtx().store,
+        oracleSchemaSnapshot: {
+          findMany: vi.fn().mockResolvedValue([snapshot]),
+          findUnique: vi.fn().mockResolvedValue(snapshot),
+          findFirst: vi.fn().mockResolvedValue(null)
+        }
+      }
+    });
+    const result = await createAdminHandlers(ctx).listSnapshotSequences("snap-1");
+
+    expect(result.status).toBe(200);
+    expect((result.body as any).data).toEqual([{ owner: "HR", name: "EMP_SEQ" }]);
+    expect(JSON.stringify(result.body)).not.toContain("snapshotData");
+  });
+
+  it("19. snapshot drill-down endpoints return 404 for missing snapshots and entries.", async () => {
+    const snapshot = richSnapshot();
+    const missingSnapshotCtx = makeCtx({
+      store: {
+        ...makeCtx().store,
+        oracleSchemaSnapshot: {
+          findMany: vi.fn().mockResolvedValue([]),
+          findUnique: vi.fn().mockResolvedValue(null),
+          findFirst: vi.fn().mockResolvedValue(null)
+        }
+      }
+    });
+    const missingEntryCtx = makeCtx({
+      store: {
+        ...makeCtx().store,
+        oracleSchemaSnapshot: {
+          findMany: vi.fn().mockResolvedValue([snapshot]),
+          findUnique: vi.fn().mockResolvedValue(snapshot),
+          findFirst: vi.fn().mockResolvedValue(null)
+        }
+      }
+    });
+
+    const missingSnapshot = await createAdminHandlers(missingSnapshotCtx).getSnapshotObject("missing", "EMPLOYEES");
+    const missingObject = await createAdminHandlers(missingEntryCtx).getSnapshotObject("snap-1", "JOBS");
+    const missingUnit = await createAdminHandlers(missingEntryCtx).getSnapshotProgramUnit("snap-1", "NOPE");
+
+    expect(missingSnapshot.status).toBe(404);
+    expect(missingObject.status).toBe(404);
+    expect(missingUnit.status).toBe(404);
+  });
+
+  it("20. POST /bridge/contracts/published/:id/check-drift persists and returns a healthy report.", async () => {
+    const ctx = makeCtx({
+      store: {
+        ...makeCtx().store,
+        oracleSchemaSnapshot: {
+          findMany: vi.fn().mockResolvedValue([]),
+          findUnique: vi.fn().mockResolvedValue(null),
+          findFirst: vi.fn().mockResolvedValue(driftReadySnapshot())
+        }
+      }
+    });
+    const result = await createAdminHandlers(ctx).checkPublishedDrift("pub-1");
+
+    expect(result.status).toBe(200);
+    expect((result.body as any).data).toMatchObject({
+      id: "drift-1",
+      publishedContractId: "pub-1",
+      status: "healthy",
+      severity: "healthy",
+      findings: []
+    });
+    expect(ctx.store.schemaDriftReport.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        publishedContractId: "pub-1",
+        severity: "healthy",
+        status: "open"
+      })
+    });
+  });
+
+  it("21. POST /bridge/contracts/published/:id/check-drift returns 404 for a missing contract.", async () => {
+    const ctx = makeCtx({
+      store: {
+        ...makeCtx().store,
+        publishedContract: {
+          ...makeCtx().store.publishedContract,
+          findUnique: vi.fn().mockResolvedValue(null)
+        }
+      }
+    });
+
+    const result = await createAdminHandlers(ctx).checkPublishedDrift("missing");
+
+    expect(result.status).toBe(404);
+    expect(ctx.store.schemaDriftReport.create).not.toHaveBeenCalled();
+  });
+
+  it("22. POST /bridge/contracts/published/:id/check-drift returns drifted findings without raw snapshot data.", async () => {
+    const snapshot = driftReadySnapshot();
+    snapshot.snapshotData.objects[0].columns[0].precision = 8;
+    const contract = storedPublished();
+    contract.contractData = resolvedContract({
+      fields: [
+        {
+          apiField: "id",
+          apiType: "integer",
+          dbColumn: "EMPLOYEE_ID",
+          oracleType: "number",
+          columnHints: { precision: 10 }
+        }
+      ]
+    });
+    const ctx = makeCtx({
+      store: {
+        ...makeCtx().store,
+        publishedContract: {
+          ...makeCtx().store.publishedContract,
+          findUnique: vi.fn().mockResolvedValue(contract)
+        },
+        oracleSchemaSnapshot: {
+          findMany: vi.fn().mockResolvedValue([]),
+          findUnique: vi.fn().mockResolvedValue(null),
+          findFirst: vi.fn().mockResolvedValue(snapshot)
+        }
+      }
+    });
+
+    const result = await createAdminHandlers(ctx).checkPublishedDrift("pub-1");
+
+    expect(result.status).toBe(200);
+    expect((result.body as any).data.status).toBe("drifted");
+    expect((result.body as any).data.findings[0]).toMatchObject({ severity: "drifted", category: "column" });
+    expect(JSON.stringify(result.body)).not.toContain("snapshotData");
+  });
+
+  it("23. POST /bridge/contracts/published/:id/retire retires, audits, writes history, and reloads cache.", async () => {
+    const audit = { log: vi.fn() };
+    const ctx = makeCtx({ audit });
+    const result = await createAdminHandlers(ctx).retirePublished("pub-1", {
+      retiredBy: "admin",
+      notes: "no longer used"
+    });
+
+    expect(result.status).toBe(200);
+    expect((result.body as any).data).toEqual({
+      id: "pub-1",
+      resourceName: "employees",
+      version: 1,
+      endpointPath: "/api/hr/employees",
+      status: "retired"
+    });
+    expect(ctx.store.publishedContract.update).toHaveBeenCalledWith({
+      where: { id: "pub-1" },
+      data: { status: "retired" }
+    });
+    expect(ctx.store.contractPublishHistory.create).toHaveBeenCalledWith({
+      data: {
+        publishedContractId: "pub-1",
+        action: "retired",
+        actor: "admin",
+        notes: "no longer used"
+      }
+    });
+    expect(ctx.cache.reloadContract).toHaveBeenCalledWith("pub-1");
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      type: "contract.retired",
+      actor: "admin"
+    }));
+  });
+
+  it("24. POST /bridge/contracts/published/:id/retire returns 404 for a missing contract.", async () => {
+    const ctx = makeCtx({
+      store: {
+        ...makeCtx().store,
+        publishedContract: {
+          ...makeCtx().store.publishedContract,
+          findUnique: vi.fn().mockResolvedValue(null)
+        }
+      }
+    });
+    const result = await createAdminHandlers(ctx).retirePublished("missing", {});
+
+    expect(result.status).toBe(404);
+    expect(ctx.store.publishedContract.update).not.toHaveBeenCalled();
+    expect(ctx.cache.reloadContract).not.toHaveBeenCalled();
+  });
+
+  it("25. POST /bridge/contracts/published/:id/retire is idempotent for already retired contracts.", async () => {
+    const retired = { ...storedPublished(), status: "retired" };
+    const ctx = makeCtx({
+      store: {
+        ...makeCtx().store,
+        publishedContract: {
+          ...makeCtx().store.publishedContract,
+          findUnique: vi.fn().mockResolvedValue(retired)
+        }
+      }
+    });
+    const result = await createAdminHandlers(ctx).retirePublished("pub-1", { retiredBy: "admin" });
+
+    expect(result.status).toBe(200);
+    expect((result.body as any).data.status).toBe("retired");
+    expect(ctx.store.publishedContract.update).not.toHaveBeenCalled();
+    expect(ctx.store.contractPublishHistory.create).not.toHaveBeenCalled();
+    expect(ctx.cache.reloadContract).toHaveBeenCalledWith("pub-1");
   });
 });

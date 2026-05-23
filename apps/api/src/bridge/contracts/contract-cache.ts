@@ -35,7 +35,12 @@ export type CacheLogger = {
 };
 
 export function createContractCache(store: ContractCacheStore, logger: CacheLogger = console): ContractCache {
-  let contractsMap = new Map<string, ResolvedApiContract>();
+  type CachedContract = {
+    publishedContractId: string;
+    contract: ResolvedApiContract;
+  };
+
+  let contractsMap = new Map<string, CachedContract>();
 
   const buildCacheKey = (method: string, endpointPath: string) => {
     return `${method.toUpperCase()}:${endpointPath.toLowerCase()}`;
@@ -71,7 +76,7 @@ export function createContractCache(store: ContractCacheStore, logger: CacheLogg
         where: { status: "active" }
       });
 
-      const newMap = new Map<string, ResolvedApiContract>();
+      const newMap = new Map<string, CachedContract>();
 
       for (const contract of activeContracts) {
         const validation = validateResolvedApiContract(contract.contractData);
@@ -83,7 +88,7 @@ export function createContractCache(store: ContractCacheStore, logger: CacheLogg
           const methods = getHttpMethodsForContract(validation.data);
           for (const method of methods) {
             const key = buildCacheKey(method, contract.endpointPath);
-            newMap.set(key, validation.data);
+            newMap.set(key, { publishedContractId: contract.id, contract: validation.data });
           }
         } else {
           logger.warn(
@@ -98,7 +103,7 @@ export function createContractCache(store: ContractCacheStore, logger: CacheLogg
 
     getContractByEndpoint(method: string, path: string) {
       const key = buildCacheKey(method, path);
-      return contractsMap.get(key);
+      return contractsMap.get(key)?.contract;
     },
 
     async reloadContract(contractId: string) {
@@ -108,8 +113,8 @@ export function createContractCache(store: ContractCacheStore, logger: CacheLogg
 
       if (!contract || contract.status !== "active") {
         let removed = false;
-        for (const [existingKey, existingContract] of contractsMap.entries()) {
-          if (existingContract.id === contractId) {
+        for (const [existingKey, cached] of contractsMap.entries()) {
+          if (cached.publishedContractId === contractId || cached.contract.id === contractId) {
             contractsMap.delete(existingKey);
             removed = true;
           }
@@ -126,8 +131,8 @@ export function createContractCache(store: ContractCacheStore, logger: CacheLogg
         }
 
         // Remove all old keys for this contract ID (endpoint or operations might have changed)
-        for (const [existingKey, existingContract] of contractsMap.entries()) {
-          if (existingContract.id === contractId) {
+        for (const [existingKey, cached] of contractsMap.entries()) {
+          if (cached.publishedContractId === contractId || cached.contract.id === contractId) {
             contractsMap.delete(existingKey);
           }
         }
@@ -135,7 +140,7 @@ export function createContractCache(store: ContractCacheStore, logger: CacheLogg
         const methods = getHttpMethodsForContract(validation.data);
         for (const method of methods) {
           const key = buildCacheKey(method, contract.endpointPath);
-          contractsMap.set(key, validation.data);
+          contractsMap.set(key, { publishedContractId: contract.id, contract: validation.data });
         }
       } else {
         logger.warn(

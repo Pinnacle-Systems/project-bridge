@@ -33,7 +33,7 @@ export type ContractStatus = "draft" | "active" | "deprecated" | "retired";
 export type OraclePaginationStrategy = "offsetFetch" | "rownum";
 
 export type OracleSource = {
-  database: string;
+  database?: string;
   owner: string;
   type: OracleSourceObjectType;
   name?: string;
@@ -177,6 +177,7 @@ export type DraftApiContract = {
 export const SCHEMA_VERSION = "1" as const;
 
 export type RuntimeContractMetadata = {
+  apiConnectionId?: string;
   loadedAt?: Date;
   cacheKey: string;
   schemaVersion: string;

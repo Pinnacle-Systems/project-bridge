@@ -113,6 +113,8 @@ export function createAdminRouter(ctx: BridgeHttpContext): Router {
   // ── Published contracts ────────────────────────────────────────────────────
   wire(router, "get",    "/contracts/published",               ()  => h.listPublished());
   wire(router, "get",    "/contracts/published/:id",           req => h.getPublished(uuidParam(req.params.id)));
+  wire(router, "post",   "/contracts/published/:id/check-drift",req => h.checkPublishedDrift(uuidParam(req.params.id)));
+  wire(router, "post",   "/contracts/published/:id/retire",     req => h.retirePublished(uuidParam(req.params.id), req.body));
 
   // ── Cache ──────────────────────────────────────────────────────────────────
   wire(router, "post",   "/cache/reload",                      ()  => h.reloadCache());
