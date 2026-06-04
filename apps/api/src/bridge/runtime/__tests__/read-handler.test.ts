@@ -213,6 +213,119 @@ describe("ReadHandler", () => {
     expect((body as any).code).toBe("NOT_FOUND");
   });
 
+  describe("Boolean filter transformation", () => {
+    function makeBooleanContract(): ResolvedApiContract {
+      return makeContract({
+        fields: [
+          { apiField: "id", apiType: "integer", oracleType: "number", dbColumn: "EMPLOYEE_ID" },
+          {
+            apiField: "isActive",
+            apiType: "boolean",
+            oracleType: "varchar2",
+            dbColumn: "ACTIVE",
+            transformers: [{ kind: "booleanMapping", oracleType: "varchar2", trueValue: "Y", falseValue: "N" }]
+          }
+        ]
+      });
+    }
+
+    it("booleanMapping filter: boolean true → binds Oracle 'Y'", async () => {
+      const contract = makeBooleanContract();
+      const adapter = makeAdapter([{ EMPLOYEE_ID: 1, ACTIVE: "Y" }]);
+      const handle = createReadHandler(makeCtx({ cache: makeCache(contract), adapter }));
+
+      await handle({ contractPath: "/api/hr/employees", filters: [{ field: "isActive", operator: "eq", value: true }] });
+
+      expect(adapter.query).toHaveBeenCalledWith(
+        expect.stringContaining('"ACTIVE" = :p1'),
+        expect.objectContaining({ p1: "Y" }),
+        expect.anything()
+      );
+    });
+
+    it("booleanMapping filter: boolean false → binds Oracle 'N'", async () => {
+      const contract = makeBooleanContract();
+      const adapter = makeAdapter([]);
+      const handle = createReadHandler(makeCtx({ cache: makeCache(contract), adapter }));
+
+      await handle({ contractPath: "/api/hr/employees", filters: [{ field: "isActive", operator: "eq", value: false }] });
+
+      expect(adapter.query).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ p1: "N" }),
+        expect.anything()
+      );
+    });
+
+    it("booleanMapping filter: string 'true' from query params → binds Oracle 'Y'", async () => {
+      const contract = makeBooleanContract();
+      const adapter = makeAdapter([{ EMPLOYEE_ID: 1, ACTIVE: "Y" }]);
+      const handle = createReadHandler(makeCtx({ cache: makeCache(contract), adapter }));
+
+      await handle({ contractPath: "/api/hr/employees", filters: [{ field: "isActive", operator: "eq", value: "true" }] });
+
+      expect(adapter.query).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ p1: "Y" }),
+        expect.anything()
+      );
+    });
+
+    it("booleanMapping filter: string 'false' from query params → binds Oracle 'N'", async () => {
+      const contract = makeBooleanContract();
+      const adapter = makeAdapter([]);
+      const handle = createReadHandler(makeCtx({ cache: makeCache(contract), adapter }));
+
+      await handle({ contractPath: "/api/hr/employees", filters: [{ field: "isActive", operator: "eq", value: "false" }] });
+
+      expect(adapter.query).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ p1: "N" }),
+        expect.anything()
+      );
+    });
+
+    it("booleanMapping filter: 'in' operator transforms each element", async () => {
+      const contract = makeBooleanContract();
+      const adapter = makeAdapter([{ EMPLOYEE_ID: 1, ACTIVE: "Y" }]);
+      const handle = createReadHandler(makeCtx({ cache: makeCache(contract), adapter }));
+
+      await handle({ contractPath: "/api/hr/employees", filters: [{ field: "isActive", operator: "in", value: [true, false] }] });
+
+      expect(adapter.query).toHaveBeenCalledWith(
+        expect.stringContaining('"ACTIVE" IN'),
+        expect.objectContaining({ p1_0: "Y", p1_1: "N" }),
+        expect.anything()
+      );
+    });
+
+    it("non-transformer string filter value is passed through unchanged", async () => {
+      const adapter = makeAdapter([{ EMPLOYEE_ID: 1, FULL_NAME: "Alice" }]);
+      const handle = createReadHandler(makeCtx({ adapter }));
+
+      await handle({ contractPath: "/api/hr/employees", filters: [{ field: "name", operator: "eq", value: "Alice" }] });
+
+      expect(adapter.query).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ p1: "Alice" }),
+        expect.anything()
+      );
+    });
+
+    it("unknown filter field still returns 400", async () => {
+      const contract = makeBooleanContract();
+      const handle = createReadHandler(makeCtx({ cache: makeCache(contract) }));
+
+      const { status, body } = await handle({
+        contractPath: "/api/hr/employees",
+        filters: [{ field: "nonexistent", operator: "eq", value: "x" }]
+      });
+
+      expect(status).toBe(400);
+      expect((body as any).error).toContain("Unknown filter field: nonexistent");
+    });
+  });
+
   it("9. Contract constraint mapping produces custom error.", async () => {
     const contract = makeContract({
       errorMappings: [

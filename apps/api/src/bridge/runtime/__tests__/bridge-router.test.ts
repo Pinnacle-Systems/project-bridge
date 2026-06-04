@@ -222,6 +222,35 @@ describe("Bridge runtime router dispatch", () => {
     expect(result.body).toEqual({ error: "Method not allowed for this contract." });
   });
 
+  it("booleanMapping filter is transformed to Oracle value before SQL bind.", async () => {
+    const contract = baseContract({
+      fields: [
+        { apiField: "id", apiType: "integer", oracleType: "number", dbColumn: "EMPLOYEE_ID", readOnly: true },
+        {
+          apiField: "isActive",
+          apiType: "boolean",
+          oracleType: "varchar2",
+          dbColumn: "ACTIVE",
+          transformers: [{ kind: "booleanMapping", oracleType: "varchar2", trueValue: "Y", falseValue: "N" }]
+        }
+      ]
+    });
+    const adapter = makeAdapter();
+    const dispatch = createBridgeDispatcher(makeCtx(contract, adapter));
+
+    await dispatch({
+      method: "GET",
+      contractPath: "/employees",
+      filters: [{ field: "isActive", operator: "eq", value: "true" }]
+    });
+
+    expect(adapter.query).toHaveBeenCalledWith(
+      expect.stringContaining('"ACTIVE" = :p1'),
+      expect.objectContaining({ p1: "Y" }),
+      expect.anything()
+    );
+  });
+
   it("unknown routes return 404.", async () => {
     const dispatch = createBridgeDispatcher(makeCtx(baseContract()));
 

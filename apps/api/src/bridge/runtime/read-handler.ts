@@ -71,10 +71,13 @@ export function createReadHandler(ctx: ReadHandlerContext) {
     }
 
     // Steps 5/6: Build query — validates filters, sorts, and pagination
-    const filters: QueryRequestFilter[] = [...(input.filters ?? [])];
+    const rawFilters: QueryRequestFilter[] = [...(input.filters ?? [])];
     if (input.idParam !== undefined) {
-      filters.push({ field: resolvePrimaryKeyApiField(contract), operator: "eq", value: input.idParam });
+      rawFilters.push({ field: resolvePrimaryKeyApiField(contract), operator: "eq", value: input.idParam });
     }
+    // Transform filter values from API shape → Oracle shape before binding
+    // (e.g. booleanMapping: filter[isActive]=true → ACTIVE = 'Y')
+    const filters = applyFilterTransformers(rawFilters, contract.fields);
 
     let sql: string;
     let binds: Record<string, unknown>;
@@ -194,6 +197,36 @@ function resolvePrimaryKeyApiField(contract: ResolvedApiContract): string {
 
   const readOnlyDbField = contract.fields.find(field => field.readOnly && field.dbColumn);
   return readOnlyDbField?.apiField ?? "id";
+}
+
+function applyFilterTransformers(
+  filters: QueryRequestFilter[],
+  fields: ApiFieldMapping[]
+): QueryRequestFilter[] {
+  if (filters.length === 0) return filters;
+  const fieldMap = new Map(fields.map(f => [f.apiField, f]));
+  return filters.map(filter => {
+    const field = fieldMap.get(filter.field);
+    if (!field?.transformers?.length) return filter;
+    if (filter.operator === "in" && Array.isArray(filter.value)) {
+      return { ...filter, value: (filter.value as unknown[]).map(v => transformFilterValue(v, field)) };
+    }
+    return { ...filter, value: transformFilterValue(filter.value, field) };
+  });
+}
+
+function transformFilterValue(value: unknown, field: ApiFieldMapping): unknown {
+  let result = value;
+  for (const transformer of field.transformers!) {
+    if (transformer.kind === "booleanMapping") {
+      // Coerce query-string "true"/"false" to boolean before applying the Oracle mapping
+      if (result === "true") result = true;
+      else if (result === "false") result = false;
+      if (result === true) result = transformer.trueValue;
+      else if (result === false) result = transformer.falseValue;
+    }
+  }
+  return result;
 }
 
 function mapRow(

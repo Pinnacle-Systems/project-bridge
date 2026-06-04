@@ -4,7 +4,10 @@
       "Bash(pnpm --filter @project-bridge/api typecheck)",
       "Bash(git -C /home/ajay/workspace/project-bridge check-ignore -v .env)",
       "Bash(git -C /home/ajay/workspace/project-bridge check-ignore -v apps/api/.env.example)",
-      "Bash(pnpm --filter @project-bridge/api test --run)"
+      "Bash(pnpm --filter @project-bridge/api test --run)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000/health)",
+      "Bash(curl -s -w \"\\\\n--- HTTP %{http_code} ---\\\\n\" \"http://localhost:3000/api/currencies?filter%5BisActive%5D=true\")",
+      "Bash(curl -s -w \"\\\\n--- HTTP %{http_code} ---\\\\n\" -X POST \"http://localhost:3000/bridge/contracts/published/7a83d34f-a330-40e9-9100-b0ee8743da89/check-drift\" -H \"Content-Type: application/json\")"
     ]
   }
 }
