@@ -3,7 +3,6 @@ import {
   createDirectWriteHandler,
   type DirectWriteHandlerContext
 } from "../direct-write-handler.js";
-import type { ContractCache } from "../../contracts/contract-cache.js";
 import type { ResolvedApiContract } from "../../contracts/index.js";
 import type { OracleConnectorAdapter } from "../../connections/oracle-adapter.js";
 import { createPermissiveChecker } from "../permissions.js";
@@ -53,16 +52,6 @@ function makeContract(overrides: Partial<ResolvedApiContract> = {}): ResolvedApi
   };
 }
 
-function makeCache(contract: ResolvedApiContract | undefined): ContractCache {
-  return {
-    getContractByEndpoint: (_method, path) =>
-      path === "/api/departments" ? contract : undefined,
-    loadActiveContracts: vi.fn(),
-    reloadContract: vi.fn(),
-    reloadAllContracts: vi.fn()
-  };
-}
-
 function makeAdapter(): OracleConnectorAdapter {
   return {
     query: vi.fn(),
@@ -77,7 +66,6 @@ function makeAdapter(): OracleConnectorAdapter {
 
 function makeCtx(overrides: Partial<DirectWriteHandlerContext> = {}): DirectWriteHandlerContext {
   return {
-    cache: makeCache(makeContract()),
     adapter: makeAdapter(),
     permissions: createPermissiveChecker(),
     oracleBindTypes: testOracleBindTypes,
@@ -93,10 +81,10 @@ describe("DirectWriteHandler", () => {
         { operation: "create", enabled: true }   // no mode
       ]
     });
-    const handle = createDirectWriteHandler(makeCtx({ cache: makeCache(contract) }));
+    const handle = createDirectWriteHandler(makeCtx());
 
     const { status, body } = await handle({
-      contractPath: "/api/departments",
+      contract,
       method: "POST",
       body: { deptName: "Engineering" }
     });
@@ -111,7 +99,7 @@ describe("DirectWriteHandler", () => {
     const handle = createDirectWriteHandler(makeCtx({ adapter }));
 
     const { body } = await handle({
-      contractPath: "/api/departments",
+      contract: makeContract(),
       method: "POST",
       body: { deptName: "Engineering", location: "Building A" }
     });
@@ -145,13 +133,10 @@ describe("DirectWriteHandler", () => {
       rowsAffected: 1,
       outBinds: { generatedId: 42 }
     });
-    const handle = createDirectWriteHandler(makeCtx({
-      cache: makeCache(contract),
-      adapter
-    }));
+    const handle = createDirectWriteHandler(makeCtx({ adapter }));
 
     const { status, body } = await handle({
-      contractPath: "/api/departments",
+      contract,
       method: "POST",
       body: { deptName: "Sales" }
     });
@@ -179,14 +164,10 @@ describe("DirectWriteHandler", () => {
       rowsAffected: 1,
       outBinds: { generatedId: 42 }
     });
-    const handle = createDirectWriteHandler(makeCtx({
-      cache: makeCache(contract),
-      adapter,
-      oracleBindTypes: numericOracleBindTypes
-    }));
+    const handle = createDirectWriteHandler(makeCtx({ adapter, oracleBindTypes: numericOracleBindTypes }));
 
     await handle({
-      contractPath: "/api/departments",
+      contract,
       method: "POST",
       body: { deptName: "Sales" }
     });
@@ -199,7 +180,7 @@ describe("DirectWriteHandler", () => {
     const handle = createDirectWriteHandler(makeCtx());
 
     const { status, body } = await handle({
-      contractPath: "/api/departments",
+      contract: makeContract(),
       method: "PATCH",
       body: { id: 999, deptName: "Hacked" },
       idParam: "1"
@@ -213,7 +194,7 @@ describe("DirectWriteHandler", () => {
     const handle = createDirectWriteHandler(makeCtx());
 
     const { status, body } = await handle({
-      contractPath: "/api/departments",
+      contract: makeContract(),
       method: "POST",
       body: { deptName: "Valid", hackerField: "drop table" }
     });
@@ -230,7 +211,7 @@ describe("DirectWriteHandler", () => {
     const handle = createDirectWriteHandler(makeCtx({ adapter }));
 
     const { status, body } = await handle({
-      contractPath: "/api/departments",
+      contract: makeContract(),
       method: "POST",
       body: { deptName: "Duplicate" }
     });
@@ -245,7 +226,7 @@ describe("DirectWriteHandler", () => {
     const handle = createDirectWriteHandler(makeCtx({ adapter }));
 
     const { status } = await handle({
-      contractPath: "/api/departments",
+      contract: makeContract(),
       method: "PATCH",
       body: { deptName: "Renamed" },
       idParam: "7"
@@ -269,7 +250,7 @@ describe("DirectWriteHandler", () => {
     const handle = createDirectWriteHandler(makeCtx({ adapter }));
 
     const { status, body } = await handle({
-      contractPath: "/api/departments",
+      contract: makeContract(),
       method: "PATCH",
       body: { deptName: "Ghost" },
       idParam: "99999"
@@ -289,10 +270,10 @@ describe("DirectWriteHandler", () => {
       }
     });
     const adapter = makeAdapter();
-    const handle = createDirectWriteHandler(makeCtx({ cache: makeCache(contract), adapter }));
+    const handle = createDirectWriteHandler(makeCtx({ adapter }));
 
     const { status, body } = await handle({
-      contractPath: "/api/departments",
+      contract,
       method: "PATCH",
       body: { deptName: "Renamed" },
       idParam: "7"
@@ -316,10 +297,10 @@ describe("DirectWriteHandler", () => {
     const adapter = makeAdapter();
     (adapter.execute as any).mockResolvedValue({ rows: [], rowsAffected: 0 });
     const audit = { log: vi.fn() };
-    const handle = createDirectWriteHandler(makeCtx({ cache: makeCache(contract), adapter, audit }));
+    const handle = createDirectWriteHandler(makeCtx({ adapter, audit }));
 
     const { status, body } = await handle({
-      contractPath: "/api/departments",
+      contract,
       method: "PATCH",
       body: { deptName: "Renamed", version: 3 },
       idParam: "7"
@@ -350,10 +331,10 @@ describe("DirectWriteHandler", () => {
       }
     });
     const adapter = makeAdapter();
-    const handle = createDirectWriteHandler(makeCtx({ cache: makeCache(contract), adapter }));
+    const handle = createDirectWriteHandler(makeCtx({ adapter }));
 
     const { status } = await handle({
-      contractPath: "/api/departments",
+      contract,
       method: "PATCH",
       body: { deptName: "Renamed", version: 3 },
       idParam: "7"

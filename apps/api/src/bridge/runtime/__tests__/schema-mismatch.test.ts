@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ContractCache } from "../../contracts/contract-cache.js";
 import type { ResolvedApiContract } from "../../contracts/index.js";
 import type { OracleConnectorAdapter } from "../../connections/oracle-adapter.js";
 import { createPermissiveChecker } from "../permissions.js";
@@ -34,15 +33,6 @@ function tableContract(overrides: Partial<ResolvedApiContract> = {}): ResolvedAp
   };
 }
 
-function makeCache(contract: ResolvedApiContract): ContractCache {
-  return {
-    getContractByEndpoint: () => contract,
-    loadActiveContracts: vi.fn(),
-    reloadContract: vi.fn(),
-    reloadAllContracts: vi.fn()
-  };
-}
-
 function makeFailingAdapter(oraMessage: string): OracleConnectorAdapter {
   return {
     query: vi.fn().mockRejectedValue(new Error(oraMessage)),
@@ -59,13 +49,12 @@ describe("Schema mismatch runtime handling", () => {
   it("1. ORA-00942 returns CONTRACT_SCHEMA_MISMATCH", async () => {
     const audit = { log: vi.fn() };
     const handle = createReadHandler({
-      cache: makeCache(tableContract()),
       adapter: makeFailingAdapter("ORA-00942: table or view does not exist"),
       permissions: createPermissiveChecker(),
       audit
     });
 
-    const result = await handle({ contractPath: "/api/hr/employees", requestId: "req-942" });
+    const result = await handle({ contract: tableContract(), requestId: "req-942" });
 
     expect(result.status).toBe(500);
     expect(result.body).toEqual(SCHEMA_MISMATCH_BODY);
@@ -85,13 +74,12 @@ describe("Schema mismatch runtime handling", () => {
   it("2. ORA-00904 returns CONTRACT_SCHEMA_MISMATCH", async () => {
     const audit = { log: vi.fn() };
     const handle = createReadHandler({
-      cache: makeCache(tableContract()),
       adapter: makeFailingAdapter('ORA-00904: "BAD_COL": invalid identifier'),
       permissions: createPermissiveChecker(),
       audit
     });
 
-    const result = await handle({ contractPath: "/api/hr/employees", requestId: "req-904" });
+    const result = await handle({ contract: tableContract(), requestId: "req-904" });
 
     expect(result.status).toBe(500);
     expect(result.body).toEqual(SCHEMA_MISMATCH_BODY);
@@ -111,13 +99,12 @@ describe("Schema mismatch runtime handling", () => {
   it("3. ORA-04063 returns CONTRACT_SCHEMA_MISMATCH", async () => {
     const audit = { log: vi.fn() };
     const handle = createReadHandler({
-      cache: makeCache(tableContract()),
       adapter: makeFailingAdapter('ORA-04063: view "HR.EMPLOYEES_V" has errors'),
       permissions: createPermissiveChecker(),
       audit
     });
 
-    const result = await handle({ contractPath: "/api/hr/employees", requestId: "req-4063" });
+    const result = await handle({ contract: tableContract(), requestId: "req-4063" });
 
     expect(result.status).toBe(500);
     expect(result.body).toEqual(SCHEMA_MISMATCH_BODY);
@@ -136,12 +123,11 @@ describe("Schema mismatch runtime handling", () => {
 
   it("4. Raw Oracle error text is not exposed in response", async () => {
     const handle = createReadHandler({
-      cache: makeCache(tableContract()),
       adapter: makeFailingAdapter("ORA-00942: table or view does not exist — HR.EMPLOYEES"),
       permissions: createPermissiveChecker()
     });
 
-    const result = await handle({ contractPath: "/api/hr/employees" });
+    const result = await handle({ contract: tableContract() });
     const serialised = JSON.stringify(result.body);
 
     expect(serialised).not.toContain("ORA-");

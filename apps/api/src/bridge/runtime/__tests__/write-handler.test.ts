@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { createWriteHandler, type WriteHandlerContext } from "../write-handler.js";
-import type { ContractCache } from "../../contracts/contract-cache.js";
 import type { ResolvedApiContract } from "../../contracts/index.js";
 import type { OracleConnectorAdapter } from "../../connections/oracle-adapter.js";
 import { createPermissiveChecker } from "../permissions.js";
@@ -61,16 +60,6 @@ function makeContract(overrides: Partial<ResolvedApiContract> = {}): ResolvedApi
   };
 }
 
-function makeCache(contract: ResolvedApiContract | undefined): ContractCache {
-  return {
-    getContractByEndpoint: (_method, path) =>
-      path === "/api/hr/employees" ? contract : undefined,
-    loadActiveContracts: vi.fn(),
-    reloadContract: vi.fn(),
-    reloadAllContracts: vi.fn()
-  };
-}
-
 function makeAdapter(outBinds: Record<string, unknown> = {}): OracleConnectorAdapter {
   return {
     query: vi.fn(),
@@ -85,7 +74,6 @@ function makeAdapter(outBinds: Record<string, unknown> = {}): OracleConnectorAda
 
 function makeCtx(overrides: Partial<WriteHandlerContext> = {}): WriteHandlerContext {
   return {
-    cache: makeCache(makeContract()),
     adapter: makeAdapter({ P_EMPLOYEE_ID: 1001 }),
     permissions: createPermissiveChecker(),
     oracleBindTypes: testOracleBindTypes,
@@ -99,7 +87,7 @@ describe("WriteHandler", () => {
     const handle = createWriteHandler(makeCtx({ adapter }));
 
     const { status, body } = await handle({
-      contractPath: "/api/hr/employees",
+      contract: makeContract(),
       method: "POST",
       body: { employeeName: "Alice", departmentId: 10 }
     });
@@ -128,7 +116,7 @@ describe("WriteHandler", () => {
     const handle = createWriteHandler(makeCtx({ adapter }));
 
     const { status, body } = await handle({
-      contractPath: "/api/hr/employees",
+      contract: makeContract(),
       method: "POST",
       body: { employeeName: "Bob", departmentId: 20 }
     });
@@ -142,7 +130,7 @@ describe("WriteHandler", () => {
     const handle = createWriteHandler(makeCtx({ adapter, oracleBindTypes: numericOracleBindTypes }));
 
     await handle({
-      contractPath: "/api/hr/employees",
+      contract: makeContract(),
       method: "POST",
       body: { employeeName: "Bob", departmentId: 20 }
     });
@@ -155,7 +143,7 @@ describe("WriteHandler", () => {
     const handle = createWriteHandler(makeCtx());
 
     const { status, body } = await handle({
-      contractPath: "/api/hr/employees",
+      contract: makeContract(),
       method: "POST",
       body: { employeeName: "Eve", departmentId: 10, hackerField: "drop table" }
     });
@@ -168,7 +156,7 @@ describe("WriteHandler", () => {
     const handle = createWriteHandler(makeCtx());
 
     const { status, body } = await handle({
-      contractPath: "/api/hr/employees",
+      contract: makeContract(),
       method: "POST",
       body: { employeeName: "Eve", departmentId: 10, employeeId: 9999 }
     });
@@ -185,7 +173,7 @@ describe("WriteHandler", () => {
     const handle = createWriteHandler(makeCtx({ adapter }));
 
     const { status, body } = await handle({
-      contractPath: "/api/hr/employees",
+      contract: makeContract(),
       method: "POST",
       body: { employeeName: "Duplicate", departmentId: 10 }
     });
@@ -200,7 +188,7 @@ describe("WriteHandler", () => {
     const handle = createWriteHandler(makeCtx({ audit }));
 
     await handle({
-      contractPath: "/api/hr/employees",
+      contract: makeContract(),
       method: "POST",
       body: { employeeName: "Carol", departmentId: 30 }
     });
@@ -226,7 +214,7 @@ describe("WriteHandler", () => {
     const handle = createWriteHandler(makeCtx({ adapter }));
 
     const { status } = await handle({
-      contractPath: "/api/hr/employees",
+      contract: makeContract(),
       method: "PUT",
       body: { employeeName: "Updated", departmentId: 10 }
     });
@@ -238,10 +226,10 @@ describe("WriteHandler", () => {
     const contract = makeContract({
       source: { database: "db1", owner: "HR", type: "table", name: "EMPLOYEES" }
     });
-    const handle = createWriteHandler(makeCtx({ cache: makeCache(contract) }));
+    const handle = createWriteHandler(makeCtx());
 
     const { status, body } = await handle({
-      contractPath: "/api/hr/employees",
+      contract,
       method: "POST",
       body: { employeeName: "X", departmentId: 1 }
     });
@@ -254,7 +242,7 @@ describe("WriteHandler", () => {
     const handle = createWriteHandler(makeCtx());
 
     const { status, body } = await handle({
-      contractPath: "/api/hr/employees",
+      contract: makeContract(),
       method: "POST",
       body: { employeeName: "NoDepId" }
     });
@@ -273,7 +261,7 @@ describe("WriteHandler", () => {
     const handle = createWriteHandler(makeCtx({ adapter, audit }));
 
     await handle({
-      contractPath: "/api/hr/employees",
+      contract: makeContract(),
       method: "POST",
       body: { employeeName: "Fail", departmentId: 10 }
     });

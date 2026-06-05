@@ -34,6 +34,9 @@ export type RuntimeAuditStatus = "received" | "succeeded" | "failed";
 export type RuntimeAuditMetadata = {
   request_id?: string;
   user_id?: string;
+  tenant_id?: string;
+  api_connection_id?: string;
+  published_contract_id?: string;
   resource: string;
   endpoint: string;
   contract_version: number;
@@ -67,6 +70,9 @@ export function buildRuntimeAuditMetadata(input: {
   startedAt: number;
   requestId?: string;
   userId?: string;
+  tenantId?: string;
+  apiConnectionId?: string;
+  publishedContractId?: string;
   oracleErrorCode?: string;
   resultCount?: number;
   code?: string;
@@ -76,6 +82,9 @@ export function buildRuntimeAuditMetadata(input: {
   return {
     request_id: input.requestId,
     user_id: input.userId,
+    tenant_id: input.tenantId,
+    api_connection_id: input.apiConnectionId,
+    published_contract_id: input.publishedContractId,
     resource: contract.resource,
     endpoint: contract.endpoint,
     contract_version: contract.version,

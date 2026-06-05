@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { createReadHandler, type ReadHandlerContext } from "../read-handler.js";
-import type { ContractCache } from "../../contracts/contract-cache.js";
 import type { ResolvedApiContract } from "../../contracts/index.js";
 import type { OracleConnectorAdapter } from "../../connections/oracle-adapter.js";
 import { createPermissiveChecker } from "../permissions.js";
@@ -29,16 +28,6 @@ function makeContract(overrides: Partial<ResolvedApiContract> = {}): ResolvedApi
   };
 }
 
-function makeCache(contract: ResolvedApiContract | undefined): ContractCache {
-  return {
-    getContractByEndpoint: (_method, path) =>
-      path === "/api/hr/employees" ? contract : undefined,
-    loadActiveContracts: vi.fn(),
-    reloadContract: vi.fn(),
-    reloadAllContracts: vi.fn()
-  };
-}
-
 function makeAdapter(rows: Record<string, unknown>[]): OracleConnectorAdapter {
   return {
     query: vi.fn().mockResolvedValue({ rows }),
@@ -53,7 +42,6 @@ function makeAdapter(rows: Record<string, unknown>[]): OracleConnectorAdapter {
 
 function makeCtx(overrides: Partial<ReadHandlerContext> = {}): ReadHandlerContext {
   return {
-    cache: makeCache(makeContract()),
     adapter: makeAdapter([{ EMPLOYEE_ID: 1, FULL_NAME: "Alice" }]),
     permissions: createPermissiveChecker(),
     ...overrides
@@ -68,7 +56,7 @@ describe("ReadHandler", () => {
     ]);
     const handle = createReadHandler(makeCtx({ adapter }));
 
-    const { status, body } = await handle({ contractPath: "/api/hr/employees" });
+    const { status, body } = await handle({ contract: makeContract() });
 
     expect(status).toBe(200);
     expect(body).toEqual({
@@ -83,7 +71,7 @@ describe("ReadHandler", () => {
     const adapter = makeAdapter([{ EMPLOYEE_ID: 42, FULL_NAME: "Carol" }]);
     const handle = createReadHandler(makeCtx({ adapter }));
 
-    const { status, body } = await handle({ contractPath: "/api/hr/employees", idParam: "42" });
+    const { status, body } = await handle({ contract: makeContract(), idParam: "42" });
 
     expect(status).toBe(200);
     expect(body).toEqual({ data: { id: 42, name: "Carol" } });
@@ -97,9 +85,9 @@ describe("ReadHandler", () => {
       ]
     });
     const adapter = makeAdapter([{ EMPLOYEE_ID: 42, FULL_NAME: "Carol" }]);
-    const handle = createReadHandler(makeCtx({ cache: makeCache(contract), adapter }));
+    const handle = createReadHandler(makeCtx({ adapter }));
 
-    const { status, body } = await handle({ contractPath: "/api/hr/employees", idParam: "42" });
+    const { status, body } = await handle({ contract, idParam: "42" });
 
     expect(status).toBe(200);
     expect(body).toEqual({ data: { employeeId: 42, name: "Carol" } });
@@ -118,9 +106,9 @@ describe("ReadHandler", () => {
       ]
     });
     const adapter = makeAdapter([{ EMPLOYEE_ID: 42, FULL_NAME: "Carol" }]);
-    const handle = createReadHandler(makeCtx({ cache: makeCache(contract), adapter }));
+    const handle = createReadHandler(makeCtx({ adapter }));
 
-    const { status, body } = await handle({ contractPath: "/api/hr/employees", idParam: "42" });
+    const { status, body } = await handle({ contract, idParam: "42" });
 
     expect(status).toBe(200);
     expect(body).toEqual({ data: { id: 42, name: "Carol" } });
@@ -135,7 +123,7 @@ describe("ReadHandler", () => {
     const handle = createReadHandler(makeCtx());
 
     const { status, body } = await handle({
-      contractPath: "/api/hr/employees",
+      contract: makeContract(),
       filters: [{ field: "nonexistent", operator: "eq", value: "x" }]
     });
 
@@ -148,7 +136,7 @@ describe("ReadHandler", () => {
     const adapter = makeAdapter([{ EMPLOYEE_ID: 1, FULL_NAME: "Alice", PASSWORD_HASH: "secret" }]);
     const handle = createReadHandler(makeCtx({ adapter }));
 
-    const { status, body } = await handle({ contractPath: "/api/hr/employees" });
+    const { status, body } = await handle({ contract: makeContract() });
 
     expect(status).toBe(200);
     const row = (body as any).data[0];
@@ -166,9 +154,9 @@ describe("ReadHandler", () => {
       ]
     });
     const adapter = makeAdapter([{ EMPLOYEE_ID: 1, FULL_NAME: "Alice" }]);
-    const handle = createReadHandler(makeCtx({ cache: makeCache(contract), adapter }));
+    const handle = createReadHandler(makeCtx({ adapter }));
 
-    const { status, body } = await handle({ contractPath: "/api/hr/employees" });
+    const { status, body } = await handle({ contract });
 
     expect(status).toBe(200);
     const row = (body as any).data[0];
@@ -180,7 +168,7 @@ describe("ReadHandler", () => {
     const adapter = makeAdapter([{ EMPLOYEE_ID: 7, FULL_NAME: "Dave" }]);
     const handle = createReadHandler(makeCtx({ adapter }));
 
-    await handle({ contractPath: "/api/hr/employees", idParam: "7" });
+    await handle({ contract: makeContract(), idParam: "7" });
 
     expect(adapter.query).toHaveBeenCalledWith(
       expect.stringContaining(":p1"),
@@ -193,7 +181,7 @@ describe("ReadHandler", () => {
     (adapter.query as any).mockRejectedValue(new Error("ORA-00942: table or view does not exist"));
     const handle = createReadHandler(makeCtx({ adapter }));
 
-    const { status, body } = await handle({ contractPath: "/api/hr/employees" });
+    const { status, body } = await handle({ contract: makeContract() });
 
     expect(status).toBe(500);
     expect((body as any).success).toBe(false);
@@ -207,7 +195,7 @@ describe("ReadHandler", () => {
     (adapter.query as any).mockRejectedValue(new Error("ORA-01403: no data found"));
     const handle = createReadHandler(makeCtx({ adapter }));
 
-    const { status, body } = await handle({ contractPath: "/api/hr/employees" });
+    const { status, body } = await handle({ contract: makeContract() });
 
     expect(status).toBe(404);
     expect((body as any).code).toBe("NOT_FOUND");
@@ -232,9 +220,9 @@ describe("ReadHandler", () => {
     it("booleanMapping filter: boolean true → binds Oracle 'Y'", async () => {
       const contract = makeBooleanContract();
       const adapter = makeAdapter([{ EMPLOYEE_ID: 1, ACTIVE: "Y" }]);
-      const handle = createReadHandler(makeCtx({ cache: makeCache(contract), adapter }));
+      const handle = createReadHandler(makeCtx({ adapter }));
 
-      await handle({ contractPath: "/api/hr/employees", filters: [{ field: "isActive", operator: "eq", value: true }] });
+      await handle({ contract, filters: [{ field: "isActive", operator: "eq", value: true }] });
 
       expect(adapter.query).toHaveBeenCalledWith(
         expect.stringContaining('"ACTIVE" = :p1'),
@@ -246,9 +234,9 @@ describe("ReadHandler", () => {
     it("booleanMapping filter: boolean false → binds Oracle 'N'", async () => {
       const contract = makeBooleanContract();
       const adapter = makeAdapter([]);
-      const handle = createReadHandler(makeCtx({ cache: makeCache(contract), adapter }));
+      const handle = createReadHandler(makeCtx({ adapter }));
 
-      await handle({ contractPath: "/api/hr/employees", filters: [{ field: "isActive", operator: "eq", value: false }] });
+      await handle({ contract, filters: [{ field: "isActive", operator: "eq", value: false }] });
 
       expect(adapter.query).toHaveBeenCalledWith(
         expect.any(String),
@@ -260,9 +248,9 @@ describe("ReadHandler", () => {
     it("booleanMapping filter: string 'true' from query params → binds Oracle 'Y'", async () => {
       const contract = makeBooleanContract();
       const adapter = makeAdapter([{ EMPLOYEE_ID: 1, ACTIVE: "Y" }]);
-      const handle = createReadHandler(makeCtx({ cache: makeCache(contract), adapter }));
+      const handle = createReadHandler(makeCtx({ adapter }));
 
-      await handle({ contractPath: "/api/hr/employees", filters: [{ field: "isActive", operator: "eq", value: "true" }] });
+      await handle({ contract, filters: [{ field: "isActive", operator: "eq", value: "true" }] });
 
       expect(adapter.query).toHaveBeenCalledWith(
         expect.any(String),
@@ -274,9 +262,9 @@ describe("ReadHandler", () => {
     it("booleanMapping filter: string 'false' from query params → binds Oracle 'N'", async () => {
       const contract = makeBooleanContract();
       const adapter = makeAdapter([]);
-      const handle = createReadHandler(makeCtx({ cache: makeCache(contract), adapter }));
+      const handle = createReadHandler(makeCtx({ adapter }));
 
-      await handle({ contractPath: "/api/hr/employees", filters: [{ field: "isActive", operator: "eq", value: "false" }] });
+      await handle({ contract, filters: [{ field: "isActive", operator: "eq", value: "false" }] });
 
       expect(adapter.query).toHaveBeenCalledWith(
         expect.any(String),
@@ -288,9 +276,9 @@ describe("ReadHandler", () => {
     it("booleanMapping filter: 'in' operator transforms each element", async () => {
       const contract = makeBooleanContract();
       const adapter = makeAdapter([{ EMPLOYEE_ID: 1, ACTIVE: "Y" }]);
-      const handle = createReadHandler(makeCtx({ cache: makeCache(contract), adapter }));
+      const handle = createReadHandler(makeCtx({ adapter }));
 
-      await handle({ contractPath: "/api/hr/employees", filters: [{ field: "isActive", operator: "in", value: [true, false] }] });
+      await handle({ contract, filters: [{ field: "isActive", operator: "in", value: [true, false] }] });
 
       expect(adapter.query).toHaveBeenCalledWith(
         expect.stringContaining('"ACTIVE" IN'),
@@ -303,7 +291,7 @@ describe("ReadHandler", () => {
       const adapter = makeAdapter([{ EMPLOYEE_ID: 1, FULL_NAME: "Alice" }]);
       const handle = createReadHandler(makeCtx({ adapter }));
 
-      await handle({ contractPath: "/api/hr/employees", filters: [{ field: "name", operator: "eq", value: "Alice" }] });
+      await handle({ contract: makeContract(), filters: [{ field: "name", operator: "eq", value: "Alice" }] });
 
       expect(adapter.query).toHaveBeenCalledWith(
         expect.any(String),
@@ -314,10 +302,10 @@ describe("ReadHandler", () => {
 
     it("unknown filter field still returns 400", async () => {
       const contract = makeBooleanContract();
-      const handle = createReadHandler(makeCtx({ cache: makeCache(contract) }));
+      const handle = createReadHandler(makeCtx());
 
       const { status, body } = await handle({
-        contractPath: "/api/hr/employees",
+        contract,
         filters: [{ field: "nonexistent", operator: "eq", value: "x" }]
       });
 
@@ -342,9 +330,9 @@ describe("ReadHandler", () => {
     (adapter.query as any).mockRejectedValue(
       new Error("ORA-00001: unique constraint (HR.EMP_EMAIL_UK) violated")
     );
-    const handle = createReadHandler(makeCtx({ cache: makeCache(contract), adapter }));
+    const handle = createReadHandler(makeCtx({ adapter }));
 
-    const { status, body } = await handle({ contractPath: "/api/hr/employees" });
+    const { status, body } = await handle({ contract });
 
     expect(status).toBe(409);
     expect((body as any).code).toBe("EMAIL_TAKEN");

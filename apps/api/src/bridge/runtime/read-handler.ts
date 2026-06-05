@@ -1,4 +1,3 @@
-import type { ContractCache } from "../contracts/contract-cache.js";
 import type { OracleConnectorAdapter } from "../connections/oracle-adapter.js";
 import type { ApiFieldMapping, OraclePaginationStrategy, ResolvedApiContract } from "../contracts/index.js";
 import {
@@ -13,7 +12,6 @@ import { transformReadValue, applyReadPermissionMask } from "../transformers/eng
 import { translateOracleError, schemaMismatchBody } from "../errors/index.js";
 
 export type ReadHandlerContext = {
-  cache: ContractCache;
   adapter: OracleConnectorAdapter;
   permissions: PermissionChecker;
   audit?: AuditLogger;
@@ -21,7 +19,7 @@ export type ReadHandlerContext = {
 };
 
 export type ReadHandlerInput = {
-  contractPath: string;
+  contract: ResolvedApiContract;
   idParam?: string;
   filters?: QueryRequestFilter[];
   sorts?: QueryRequestSort[];
@@ -29,6 +27,9 @@ export type ReadHandlerInput = {
   offset?: number;
   identity?: RequestIdentity;
   requestId?: string;
+  tenantId?: string;
+  apiConnectionId?: string;
+  publishedContractId?: string;
 };
 
 export type ReadHandlerOutput = {
@@ -40,12 +41,7 @@ export function createReadHandler(ctx: ReadHandlerContext) {
   return async function handle(input: ReadHandlerInput): Promise<ReadHandlerOutput> {
     const startedAt = Date.now();
     const operation = input.idParam !== undefined ? "read" : "list";
-
-    // Step 1: Resolve contract from cache
-    const contract = ctx.cache.getContractByEndpoint("GET", input.contractPath);
-    if (!contract) {
-      return { status: 404, body: { error: "No contract found for this endpoint." } };
-    }
+    const contract = input.contract;
 
     // Step 3: Check operation enabled
     const policy = contract.operations.find(op => op.operation === operation);
@@ -61,7 +57,10 @@ export function createReadHandler(ctx: ReadHandlerContext) {
         status: "received",
         startedAt,
         requestId: input.requestId,
-        userId: input.identity?.userId
+        userId: input.identity?.userId,
+        tenantId: input.tenantId,
+        apiConnectionId: input.apiConnectionId,
+        publishedContractId: input.publishedContractId
       })
     });
 
@@ -99,6 +98,9 @@ export function createReadHandler(ctx: ReadHandlerContext) {
           startedAt,
           requestId: input.requestId,
           userId: input.identity?.userId,
+          tenantId: input.tenantId,
+          apiConnectionId: input.apiConnectionId,
+          publishedContractId: input.publishedContractId,
           code: "VALIDATION_FAILED"
         })
       });
@@ -122,6 +124,9 @@ export function createReadHandler(ctx: ReadHandlerContext) {
           startedAt,
           requestId: input.requestId,
           userId: input.identity?.userId,
+          tenantId: input.tenantId,
+          apiConnectionId: input.apiConnectionId,
+          publishedContractId: input.publishedContractId,
           oracleErrorCode,
           code: translated.code
         })
@@ -136,6 +141,9 @@ export function createReadHandler(ctx: ReadHandlerContext) {
             startedAt,
             requestId: input.requestId,
             userId: input.identity?.userId,
+            tenantId: input.tenantId,
+            apiConnectionId: input.apiConnectionId,
+            publishedContractId: input.publishedContractId,
             oracleErrorCode,
             code: translated.code
           })
@@ -168,6 +176,9 @@ export function createReadHandler(ctx: ReadHandlerContext) {
         startedAt,
         requestId: input.requestId,
         userId: input.identity?.userId,
+        tenantId: input.tenantId,
+        apiConnectionId: input.apiConnectionId,
+        publishedContractId: input.publishedContractId,
         resultCount: mapped.length
       })
     });

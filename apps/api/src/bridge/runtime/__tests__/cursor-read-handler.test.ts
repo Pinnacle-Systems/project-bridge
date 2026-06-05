@@ -4,7 +4,6 @@ import {
   type CursorLike,
   type CursorReadHandlerContext
 } from "../cursor-read-handler.js";
-import type { ContractCache } from "../../contracts/contract-cache.js";
 import type { ResolvedApiContract } from "../../contracts/index.js";
 import type { OracleConnectorAdapter } from "../../connections/oracle-adapter.js";
 import { createPermissiveChecker } from "../permissions.js";
@@ -84,16 +83,6 @@ function makeCursor(rows: Record<string, unknown>[]): CursorLike {
   };
 }
 
-function makeCache(contract: ResolvedApiContract | undefined): ContractCache {
-  return {
-    getContractByEndpoint: (_method, path) =>
-      path === "/api/hr/employees" ? contract : undefined,
-    loadActiveContracts: vi.fn(),
-    reloadContract: vi.fn(),
-    reloadAllContracts: vi.fn()
-  };
-}
-
 function makeAdapter(cursor: CursorLike): OracleConnectorAdapter {
   return {
     query: vi.fn(),
@@ -108,7 +97,6 @@ function makeAdapter(cursor: CursorLike): OracleConnectorAdapter {
 
 function makeCtx(cursor: CursorLike, overrides: Partial<CursorReadHandlerContext> = {}): CursorReadHandlerContext {
   return {
-    cache: makeCache(makeContract()),
     adapter: makeAdapter(cursor),
     permissions: createPermissiveChecker(),
     oracleBindTypes: testOracleBindTypes,
@@ -126,7 +114,7 @@ describe("CursorReadHandler", () => {
     ]);
     const handle = createCursorReadHandler(makeCtx(cursor));
 
-    const { status, body } = await handle({ contractPath: "/api/hr/employees" });
+    const { status, body } = await handle({ contract: makeContract() });
 
     expect(status).toBe(200);
     expect((body as any).data).toEqual([
@@ -140,7 +128,7 @@ describe("CursorReadHandler", () => {
     const adapter = makeAdapter(cursor);
     const handle = createCursorReadHandler(makeCtx(cursor, { adapter, oracleBindTypes: numericOracleBindTypes }));
 
-    await handle({ contractPath: "/api/hr/employees" });
+    await handle({ contract: makeContract() });
 
     const binds = (adapter.executePlsqlBlock as any).mock.calls[0][1];
     expect(binds.P_RESULT).toEqual({ dir: "out", type: numericOracleBindTypes.cursor });
@@ -152,7 +140,7 @@ describe("CursorReadHandler", () => {
     ]);
     const handle = createCursorReadHandler(makeCtx(cursor));
 
-    const { status, body } = await handle({ contractPath: "/api/hr/employees" });
+    const { status, body } = await handle({ contract: makeContract() });
 
     expect(status).toBe(200);
     expect((body as any).data[0].name).toBe("Carol");
@@ -169,9 +157,9 @@ describe("CursorReadHandler", () => {
       }
     });
     const cursor = makeCursor([{ EMPLOYEE_ID: 7, EMPLOYEE_NAME: "Dana" }]);
-    const handle = createCursorReadHandler(makeCtx(cursor, { cache: makeCache(contract) }));
+    const handle = createCursorReadHandler(makeCtx(cursor));
 
-    const { status, body } = await handle({ contractPath: "/api/hr/employees" });
+    const { status, body } = await handle({ contract });
 
     expect(status).toBe(200);
     expect((body as any).data).toEqual([{ id: 7, name: "Dana" }]);
@@ -188,9 +176,9 @@ describe("CursorReadHandler", () => {
       }
     });
     const cursor = makeCursor([{ employee_id: 8, employee_name: "Eli" }]);
-    const handle = createCursorReadHandler(makeCtx(cursor, { cache: makeCache(contract) }));
+    const handle = createCursorReadHandler(makeCtx(cursor));
 
-    const { status, body } = await handle({ contractPath: "/api/hr/employees" });
+    const { status, body } = await handle({ contract });
 
     expect(status).toBe(200);
     expect((body as any).data).toEqual([{ id: 8, name: "Eli" }]);
@@ -203,7 +191,7 @@ describe("CursorReadHandler", () => {
     ]);
     const handle = createCursorReadHandler(makeCtx(cursor));
 
-    const { body } = await handle({ contractPath: "/api/hr/employees" });
+    const { body } = await handle({ contract: makeContract() });
 
     expect((body as any).data[0].isActive).toBe(true);
     expect((body as any).data[1].isActive).toBe(false);
@@ -215,7 +203,7 @@ describe("CursorReadHandler", () => {
     ]);
     const handle = createCursorReadHandler(makeCtx(cursor));
 
-    await handle({ contractPath: "/api/hr/employees" });
+    await handle({ contract: makeContract() });
 
     expect(cursor.close).toHaveBeenCalledOnce();
   });
@@ -229,7 +217,7 @@ describe("CursorReadHandler", () => {
 
     const handle = createCursorReadHandler(makeCtx(cursor, { fetchBatchSize: 1 }));
 
-    const { status } = await handle({ contractPath: "/api/hr/employees", maxRows: 100 });
+    const { status } = await handle({ contract: makeContract(), maxRows: 100 });
 
     // Cursor must be closed even though iteration errored
     expect(cursor.close).toHaveBeenCalledOnce();
@@ -247,7 +235,7 @@ describe("CursorReadHandler", () => {
     const handle = createCursorReadHandler(makeCtx(cursor));
 
     const { status, body } = await handle({
-      contractPath: "/api/hr/employees",
+      contract: makeContract(),
       maxRows: 10
     });
 

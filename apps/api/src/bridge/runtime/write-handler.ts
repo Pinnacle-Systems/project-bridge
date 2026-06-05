@@ -1,4 +1,3 @@
-import type { ContractCache } from "../contracts/contract-cache.js";
 import type { OracleConnectorAdapter, BindValue } from "../connections/oracle-adapter.js";
 import type {
   ResolvedApiContract,
@@ -22,7 +21,6 @@ import {
 } from "./oracle-helpers.js";
 
 export type WriteHandlerContext = {
-  cache: ContractCache;
   adapter: OracleConnectorAdapter;
   permissions: PermissionChecker;
   audit?: AuditLogger;
@@ -30,11 +28,14 @@ export type WriteHandlerContext = {
 };
 
 export type WriteHandlerInput = {
-  contractPath: string;
+  contract: ResolvedApiContract;
   method: "POST" | "PUT";
   body: Record<string, unknown>;
   identity?: RequestIdentity;
   requestId?: string;
+  tenantId?: string;
+  apiConnectionId?: string;
+  publishedContractId?: string;
 };
 
 export type WriteHandlerOutput = {
@@ -48,15 +49,9 @@ export function createWriteHandler(ctx: WriteHandlerContext) {
   return async function handle(input: WriteHandlerInput): Promise<WriteHandlerOutput> {
     const startedAt = Date.now();
     const operation: ContractOperation = input.method === "POST" ? "create" : "update";
-    const httpMethod = input.method;
+    const contract = input.contract;
 
-    // 1. Resolve contract from cache
-    const contract = ctx.cache.getContractByEndpoint(httpMethod, input.contractPath);
-    if (!contract) {
-      return { status: 404, body: { error: "No contract found for this endpoint." } };
-    }
-
-    // 2. Validate operation enabled and mode is package/procedure
+    // 1. Validate operation enabled and mode is package/procedure
     const policy = contract.operations.find(op => op.operation === operation);
     if (!policy?.enabled) {
       return { status: 404, body: { error: "Not found." } };
@@ -89,7 +84,10 @@ export function createWriteHandler(ctx: WriteHandlerContext) {
         status: "received",
         startedAt,
         requestId: input.requestId,
-        userId: input.identity?.userId
+        userId: input.identity?.userId,
+        tenantId: input.tenantId,
+        apiConnectionId: input.apiConnectionId,
+        publishedContractId: input.publishedContractId
       })
     });
 
@@ -175,6 +173,9 @@ export function createWriteHandler(ctx: WriteHandlerContext) {
             startedAt,
             requestId: input.requestId,
             userId: input.identity?.userId,
+            tenantId: input.tenantId,
+            apiConnectionId: input.apiConnectionId,
+            publishedContractId: input.publishedContractId,
             code: "VALIDATION_FAILED"
           })
         });
@@ -208,6 +209,9 @@ export function createWriteHandler(ctx: WriteHandlerContext) {
           startedAt,
           requestId: input.requestId,
           userId: input.identity?.userId,
+          tenantId: input.tenantId,
+          apiConnectionId: input.apiConnectionId,
+          publishedContractId: input.publishedContractId,
           oracleErrorCode,
           code: translated.code
         })
@@ -222,6 +226,9 @@ export function createWriteHandler(ctx: WriteHandlerContext) {
             startedAt,
             requestId: input.requestId,
             userId: input.identity?.userId,
+            tenantId: input.tenantId,
+            apiConnectionId: input.apiConnectionId,
+            publishedContractId: input.publishedContractId,
             oracleErrorCode,
             code: translated.code
           })
@@ -258,6 +265,9 @@ export function createWriteHandler(ctx: WriteHandlerContext) {
           startedAt,
           requestId: input.requestId,
           userId: input.identity?.userId,
+          tenantId: input.tenantId,
+          apiConnectionId: input.apiConnectionId,
+          publishedContractId: input.publishedContractId,
           code: "RECORD_MODIFIED"
         })
       });
@@ -279,7 +289,10 @@ export function createWriteHandler(ctx: WriteHandlerContext) {
         status: "succeeded",
         startedAt,
         requestId: input.requestId,
-        userId: input.identity?.userId
+        userId: input.identity?.userId,
+        tenantId: input.tenantId,
+        apiConnectionId: input.apiConnectionId,
+        publishedContractId: input.publishedContractId
       })
     });
     ctx.audit?.log({
@@ -290,7 +303,10 @@ export function createWriteHandler(ctx: WriteHandlerContext) {
         status: "succeeded",
         startedAt,
         requestId: input.requestId,
-        userId: input.identity?.userId
+        userId: input.identity?.userId,
+        tenantId: input.tenantId,
+        apiConnectionId: input.apiConnectionId,
+        publishedContractId: input.publishedContractId
       })
     });
 

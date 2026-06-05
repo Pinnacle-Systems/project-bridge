@@ -1,4 +1,3 @@
-import type { ContractCache } from "../contracts/contract-cache.js";
 import type { OracleConnectorAdapter } from "../connections/oracle-adapter.js";
 import type {
   ResolvedApiContract,
@@ -19,7 +18,6 @@ import { quoteIdentifier } from "../database/query-builder.js";
 import { buildOutBind, type OracleBindTypeRegistry } from "./oracle-helpers.js";
 
 export type DirectWriteHandlerContext = {
-  cache: ContractCache;
   adapter: OracleConnectorAdapter;
   permissions: PermissionChecker;
   audit?: AuditLogger;
@@ -27,13 +25,16 @@ export type DirectWriteHandlerContext = {
 };
 
 export type DirectWriteHandlerInput = {
-  contractPath: string;
+  contract: ResolvedApiContract;
   method: "POST" | "PATCH";
   body: Record<string, unknown>;
   /** Primary key value — required for PATCH/update. */
   idParam?: string;
   identity?: RequestIdentity;
   requestId?: string;
+  tenantId?: string;
+  apiConnectionId?: string;
+  publishedContractId?: string;
 };
 
 export type DirectWriteHandlerOutput = {
@@ -47,15 +48,9 @@ export function createDirectWriteHandler(ctx: DirectWriteHandlerContext) {
   return async function handle(input: DirectWriteHandlerInput): Promise<DirectWriteHandlerOutput> {
     const startedAt = Date.now();
     const operation: ContractOperation = input.method === "POST" ? "create" : "update";
-    const httpMethod = input.method;
+    const contract = input.contract;
 
-    // 1. Resolve contract
-    const contract = ctx.cache.getContractByEndpoint(httpMethod, input.contractPath);
-    if (!contract) {
-      return { status: 404, body: { error: "No contract found for this endpoint." } };
-    }
-
-    // 2. Validate operation enabled and mode is direct_table
+    // 1. Validate operation enabled and mode is direct_table
     const policy = contract.operations.find(op => op.operation === operation);
     if (!policy?.enabled) {
       return { status: 404, body: { error: "Not found." } };
@@ -88,7 +83,10 @@ export function createDirectWriteHandler(ctx: DirectWriteHandlerContext) {
         status: "received",
         startedAt,
         requestId: input.requestId,
-        userId: input.identity?.userId
+        userId: input.identity?.userId,
+        tenantId: input.tenantId,
+        apiConnectionId: input.apiConnectionId,
+        publishedContractId: input.publishedContractId
       })
     });
 
@@ -109,6 +107,9 @@ export function createDirectWriteHandler(ctx: DirectWriteHandlerContext) {
           startedAt,
           requestId: input.requestId,
           userId: input.identity?.userId,
+          tenantId: input.tenantId,
+          apiConnectionId: input.apiConnectionId,
+          publishedContractId: input.publishedContractId,
           code: "VALIDATION_FAILED"
         })
       });
@@ -222,6 +223,9 @@ export function createDirectWriteHandler(ctx: DirectWriteHandlerContext) {
                 startedAt,
                 requestId: input.requestId,
                 userId: input.identity?.userId,
+                tenantId: input.tenantId,
+                apiConnectionId: input.apiConnectionId,
+                publishedContractId: input.publishedContractId,
                 code: "RECORD_MODIFIED"
               })
             });
@@ -248,6 +252,9 @@ export function createDirectWriteHandler(ctx: DirectWriteHandlerContext) {
           startedAt,
           requestId: input.requestId,
           userId: input.identity?.userId,
+          tenantId: input.tenantId,
+          apiConnectionId: input.apiConnectionId,
+          publishedContractId: input.publishedContractId,
           oracleErrorCode,
           code: translated.code
         })
@@ -262,6 +269,9 @@ export function createDirectWriteHandler(ctx: DirectWriteHandlerContext) {
             startedAt,
             requestId: input.requestId,
             userId: input.identity?.userId,
+            tenantId: input.tenantId,
+            apiConnectionId: input.apiConnectionId,
+            publishedContractId: input.publishedContractId,
             oracleErrorCode,
             code: translated.code
           })
@@ -289,7 +299,10 @@ export function createDirectWriteHandler(ctx: DirectWriteHandlerContext) {
         status: "succeeded",
         startedAt,
         requestId: input.requestId,
-        userId: input.identity?.userId
+        userId: input.identity?.userId,
+        tenantId: input.tenantId,
+        apiConnectionId: input.apiConnectionId,
+        publishedContractId: input.publishedContractId
       })
     });
 

@@ -6,9 +6,14 @@ import type { ContractCache } from "../bridge/contracts/contract-cache.js";
 import type { ResolvedApiContract } from "../bridge/contracts/index.js";
 import type { OracleConnectorAdapter } from "../bridge/connections/oracle-adapter.js";
 import type { CursorLike } from "../bridge/runtime/cursor-read-handler.js";
+import type { PrincipalProvider } from "../bridge/auth/index.js";
+import type { TenantResolver } from "../bridge/auth/tenant-resolution.js";
 import { testOracleBindTypes } from "../bridge/runtime/oracle-helpers.js";
 
 const NOW = new Date("2026-05-23T00:00:00.000Z");
+
+const DEFAULT_TENANT = "tenant-a";
+const DEFAULT_CONN = "conn-a";
 
 function tableContract(overrides: Partial<ResolvedApiContract> = {}): ResolvedApiContract {
   return {
@@ -100,10 +105,20 @@ function makeCursor(rows: Record<string, unknown>[]): CursorLike {
   };
 }
 
+/**
+ * Scoped contract cache: returns contracts only for DEFAULT_TENANT + DEFAULT_CONN.
+ * getContractByEndpoint always returns undefined — runtime must use scoped lookup.
+ */
 function makeCache(entries: Array<{ method: string; path: string; contract: ResolvedApiContract }>): ContractCache {
   return {
-    getContractByEndpoint: vi.fn((method, path) => {
-      return entries.find(entry => entry.method === method.toUpperCase() && entry.path === path)?.contract;
+    getContractByEndpoint: vi.fn(() => undefined),
+    getContractByScopedEndpoint: vi.fn(({ tenantId, apiConnectionId, method, endpointPath }) => {
+      if (tenantId !== DEFAULT_TENANT || apiConnectionId !== DEFAULT_CONN) return undefined;
+      const entry = entries.find(
+        e => e.method === method.toUpperCase() && e.path === endpointPath
+      );
+      if (!entry) return undefined;
+      return { contract: entry.contract, publishedContractId: "pub-1" };
     }),
     loadActiveContracts: vi.fn(),
     reloadContract: vi.fn(),
@@ -123,12 +138,42 @@ function makeAdapter(cursor = makeCursor([])): OracleConnectorAdapter {
   };
 }
 
+/** Stub auth that grants access when x-bridge-user-id header is set. */
+function makeAuth(): PrincipalProvider {
+  return {
+    resolvePrincipal(req) {
+      const userId = req.get("x-bridge-user-id");
+      if (!userId) return null;
+      const tenantIds = (req.get("x-bridge-tenant-id") ?? "").split(",").map(s => s.trim()).filter(Boolean);
+      return { userId, tenantIds, roles: [], permissions: [] };
+    }
+  };
+}
+
+/** Stub tenant resolver that grants access for DEFAULT_TENANT and resolves DEFAULT_CONN. */
+function makeTenantResolver(): TenantResolver {
+  return {
+    async resolveTenant(principal, tenantId) {
+      if (!principal) return { ok: false, error: { kind: "UNAUTHENTICATED" } };
+      if (!principal.tenantIds.includes(tenantId)) {
+        return { ok: false, error: { kind: "TENANT_NOT_IN_PRINCIPAL", tenantId } };
+      }
+      if (tenantId !== DEFAULT_TENANT) {
+        return { ok: false, error: { kind: "TENANT_ACCESS_DENIED", tenantId } };
+      }
+      return { ok: true, context: { tenantId, apiConnectionId: DEFAULT_CONN } };
+    }
+  };
+}
+
 function makeCtx(cache: ContractCache, adapter: OracleConnectorAdapter): BridgeHttpContext {
   return {
     cache,
     adapter,
     permissions: { check: () => true },
     oracleBindTypes: testOracleBindTypes,
+    auth: makeAuth(),
+    tenantResolver: makeTenantResolver(),
     connections: {} as any,
     inspector: {} as any,
     capabilityDetector: {} as any,
@@ -139,21 +184,33 @@ function makeCtx(cache: ContractCache, adapter: OracleConnectorAdapter): BridgeH
   };
 }
 
+/** Default auth headers for authenticated requests. */
+const AUTH_HEADERS = {
+  "x-bridge-user-id": "user-1",
+  "x-bridge-tenant-id": DEFAULT_TENANT
+};
+
 async function request(
   ctx: BridgeHttpContext,
   method: string,
   path: string,
-  body?: Record<string, unknown>
+  options: {
+    body?: Record<string, unknown>;
+    headers?: Record<string, string>;
+  } = {}
 ): Promise<{ status: number; body: unknown }> {
   const app = createApp(ctx, { adminApiKey: "test-key" });
-  const payload = body ? JSON.stringify(body) : undefined;
+  const payload = options.body ? JSON.stringify(options.body) : undefined;
   const req = new Readable({ read() {} }) as any;
   req.url = path;
   req.originalUrl = path;
   req.method = method;
-  req.headers = payload
-    ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload).toString() }
-    : {};
+  req.headers = {
+    ...(payload
+      ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload).toString() }
+      : {}),
+    ...(options.headers ?? AUTH_HEADERS)
+  };
   const socket = new PassThrough() as any;
   socket.destroy = vi.fn();
   req.socket = socket;
@@ -209,7 +266,7 @@ describe("production app runtime router", () => {
     const adapter = makeAdapter();
     const ctx = makeCtx(makeCache([{ method: "POST", path: "/employees", contract: procedureContract() }]), adapter);
 
-    const result = await request(ctx, "POST", "/api/employees", { name: "Alice" });
+    const result = await request(ctx, "POST", "/api/employees", { body: { name: "Alice" } });
 
     expect(result.status).toBe(201);
     expect(adapter.executePlsqlBlock).toHaveBeenCalledOnce();
@@ -220,7 +277,7 @@ describe("production app runtime router", () => {
     const adapter = makeAdapter();
     const ctx = makeCtx(makeCache([{ method: "PATCH", path: "/employees", contract: directContract() }]), adapter);
 
-    const result = await request(ctx, "PATCH", "/api/employees/1", { name: "Alice" });
+    const result = await request(ctx, "PATCH", "/api/employees/1", { body: { name: "Alice" } });
 
     expect(result.status).toBe(200);
     expect(adapter.execute).toHaveBeenCalledOnce();
@@ -283,10 +340,79 @@ describe("production app runtime router", () => {
       operations: [{ operation: "create", enabled: false }]
     }) }]), adapter);
 
-    const result = await request(ctx, "POST", "/api/employees", { name: "Alice" });
+    const result = await request(ctx, "POST", "/api/employees", { body: { name: "Alice" } });
 
     expect(result.status).toBe(405);
     expect(result.body).toEqual({ error: "Method not allowed for this contract." });
     expect(adapter.executePlsqlBlock).not.toHaveBeenCalled();
+  });
+});
+
+describe("production app runtime router — auth enforcement", () => {
+  it("request with no auth headers returns 401.", async () => {
+    const adapter = makeAdapter();
+    const ctx = makeCtx(makeCache([{ method: "GET", path: "/employees", contract: tableContract() }]), adapter);
+
+    const result = await request(ctx, "GET", "/api/employees", { headers: {} });
+
+    expect(result.status).toBe(401);
+    expect(adapter.query).not.toHaveBeenCalled();
+  });
+
+  it("request with user-id but no tenant-id header returns 401.", async () => {
+    const adapter = makeAdapter();
+    const ctx = makeCtx(makeCache([{ method: "GET", path: "/employees", contract: tableContract() }]), adapter);
+
+    const result = await request(ctx, "GET", "/api/employees", {
+      headers: { "x-bridge-user-id": "user-1" }
+    });
+
+    expect(result.status).toBe(401);
+    expect(adapter.query).not.toHaveBeenCalled();
+  });
+
+  it("authenticated request for a tenant the user does not belong to returns 403.", async () => {
+    const adapter = makeAdapter();
+    const ctx = makeCtx(makeCache([{ method: "GET", path: "/employees", contract: tableContract() }]), adapter);
+
+    const result = await request(ctx, "GET", "/api/employees", {
+      headers: { "x-bridge-user-id": "user-1", "x-bridge-tenant-id": "tenant-other" }
+    });
+
+    expect(result.status).toBe(403);
+    expect(adapter.query).not.toHaveBeenCalled();
+  });
+
+  it("authenticated request with valid tenant but no matching contract returns 404.", async () => {
+    const adapter = makeAdapter();
+    const ctx = makeCtx(makeCache([]), adapter);
+
+    const result = await request(ctx, "GET", "/api/employees");
+
+    expect(result.status).toBe(404);
+    expect(result.body).toEqual({ error: "No contract found for this endpoint." });
+    expect(adapter.query).not.toHaveBeenCalled();
+  });
+
+  it("tenant A /employees resolves only tenant A contract.", async () => {
+    const adapter = makeAdapter();
+    const contractA = tableContract({ id: "contract-a" });
+    const ctx = makeCtx(makeCache([{ method: "GET", path: "/employees", contract: contractA }]), adapter);
+
+    const result = await request(ctx, "GET", "/api/employees");
+
+    expect(result.status).toBe(200);
+    expect(adapter.query).toHaveBeenCalledOnce();
+  });
+
+  it("runtime never calls getContractByEndpoint for /api/* dispatch.", async () => {
+    const adapter = makeAdapter();
+    const cache = makeCache([{ method: "GET", path: "/employees", contract: tableContract() }]);
+    const ctx = makeCtx(cache, adapter);
+
+    await request(ctx, "GET", "/api/employees");
+
+    expect(cache.getContractByEndpoint).not.toHaveBeenCalled();
+    expect(cache.getContractByScopedEndpoint).toHaveBeenCalled();
   });
 });

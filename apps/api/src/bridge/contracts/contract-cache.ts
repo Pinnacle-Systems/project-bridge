@@ -9,6 +9,8 @@ export type StoredPublishedContractForCache = {
   endpointPath: string;
   contractData: unknown;
   status: string;
+  tenantId?: string | null;
+  apiConnectionId?: string | null;
 };
 
 export type ContractCacheStore = {
@@ -22,8 +24,27 @@ export type ContractCacheStore = {
   };
 };
 
+export type ScopedEndpointContext = {
+  tenantId: string;
+  apiConnectionId: string;
+  method: string;
+  endpointPath: string;
+};
+
+export type ScopedContractResult = {
+  contract: ResolvedApiContract;
+  publishedContractId: string;
+};
+
 export type ContractCache = {
   loadActiveContracts(): Promise<void>;
+  /** Runtime contract resolution — always requires tenantId + apiConnectionId. Returns contract + publishedContractId for audit tracing. */
+  getContractByScopedEndpoint(ctx: ScopedEndpointContext): ScopedContractResult | undefined;
+  /**
+   * Legacy unscoped lookup — method + path only.
+   * NOT used by the /api/* runtime dispatcher (Phase 9e+).
+   * Retained for legacy migration tooling and contracts without tenant metadata.
+   */
   getContractByEndpoint(method: string, path: string): ResolvedApiContract | undefined;
   reloadContract(contractId: string): Promise<void>;
   reloadAllContracts(): Promise<void>;
@@ -40,11 +61,16 @@ export function createContractCache(store: ContractCacheStore, logger: CacheLogg
     contract: ResolvedApiContract;
   };
 
-  let contractsMap = new Map<string, CachedContract>();
+  // Tenant-scoped contracts: key = tenantId:apiConnectionId:METHOD:endpointPath
+  let scopedMap = new Map<string, CachedContract>();
+  // Legacy unscoped contracts: key = METHOD:endpointPath (backward compat only)
+  let legacyMap = new Map<string, CachedContract>();
 
-  const buildCacheKey = (method: string, endpointPath: string) => {
-    return `${method.toUpperCase()}:${endpointPath.toLowerCase()}`;
-  };
+  const buildScopedCacheKey = (tenantId: string, apiConnectionId: string, method: string, endpointPath: string): string =>
+    `${tenantId}:${apiConnectionId}:${method.toUpperCase()}:${endpointPath.toLowerCase()}`;
+
+  const buildLegacyCacheKey = (method: string, endpointPath: string): string =>
+    `${method.toUpperCase()}:${endpointPath.toLowerCase()}`;
 
   const getHttpMethodsForContract = (contract: ResolvedApiContract): string[] => {
     const methods = new Set<string>();
@@ -70,52 +96,85 @@ export function createContractCache(store: ContractCacheStore, logger: CacheLogg
     return Array.from(methods);
   };
 
+  const indexContract = (
+    row: StoredPublishedContractForCache,
+    contract: ResolvedApiContract,
+    target: { scoped: Map<string, CachedContract>; legacy: Map<string, CachedContract> }
+  ): void => {
+    const tenantId = row.tenantId ?? contract.runtime.tenantId ?? null;
+    const apiConnectionId = row.apiConnectionId ?? contract.runtime.apiConnectionId ?? null;
+    const methods = getHttpMethodsForContract(contract);
+
+    if (tenantId && apiConnectionId) {
+      for (const method of methods) {
+        const key = buildScopedCacheKey(tenantId, apiConnectionId, method, row.endpointPath);
+        target.scoped.set(key, { publishedContractId: row.id, contract });
+      }
+    } else {
+      for (const method of methods) {
+        const key = buildLegacyCacheKey(method, row.endpointPath);
+        target.legacy.set(key, { publishedContractId: row.id, contract });
+      }
+    }
+  };
+
   return {
     async loadActiveContracts() {
       const activeContracts = await store.publishedContract.findMany({
         where: { status: "active" }
       });
 
-      const newMap = new Map<string, CachedContract>();
+      const newScoped = new Map<string, CachedContract>();
+      const newLegacy = new Map<string, CachedContract>();
 
-      for (const contract of activeContracts) {
-        const validation = validateResolvedApiContract(contract.contractData);
-        if (validation.success) {
-          if (validation.data.runtime.schemaVersion !== SCHEMA_VERSION) {
-            logger.warn(`Contract ${contract.id} uses unsupported schema version ${validation.data.runtime.schemaVersion}. Skipping.`);
-            continue;
-          }
-          const methods = getHttpMethodsForContract(validation.data);
-          for (const method of methods) {
-            const key = buildCacheKey(method, contract.endpointPath);
-            newMap.set(key, { publishedContractId: contract.id, contract: validation.data });
-          }
-        } else {
+      for (const row of activeContracts) {
+        const validation = validateResolvedApiContract(row.contractData);
+        if (!validation.success) {
           logger.warn(
-            `Failed to validate contract schema for active contract ${contract.id}:`,
+            `Failed to validate contract schema for active contract ${row.id}:`,
             validation.issues
           );
+          continue;
         }
+        if (validation.data.runtime.schemaVersion !== SCHEMA_VERSION) {
+          logger.warn(`Contract ${row.id} uses unsupported schema version ${validation.data.runtime.schemaVersion}. Skipping.`);
+          continue;
+        }
+        indexContract(row, validation.data, { scoped: newScoped, legacy: newLegacy });
       }
 
-      contractsMap = newMap;
+      scopedMap = newScoped;
+      legacyMap = newLegacy;
+    },
+
+    getContractByScopedEndpoint({ tenantId, apiConnectionId, method, endpointPath }) {
+      const key = buildScopedCacheKey(tenantId, apiConnectionId, method, endpointPath);
+      const entry = scopedMap.get(key);
+      if (!entry) return undefined;
+      return { contract: entry.contract, publishedContractId: entry.publishedContractId };
     },
 
     getContractByEndpoint(method: string, path: string) {
-      const key = buildCacheKey(method, path);
-      return contractsMap.get(key)?.contract;
+      const key = buildLegacyCacheKey(method, path);
+      return legacyMap.get(key)?.contract;
     },
 
     async reloadContract(contractId: string) {
-      const contract = await store.publishedContract.findUnique({
+      const row = await store.publishedContract.findUnique({
         where: { id: contractId }
       });
 
-      if (!contract || contract.status !== "active") {
+      if (!row || row.status !== "active") {
         let removed = false;
-        for (const [existingKey, cached] of contractsMap.entries()) {
+        for (const [key, cached] of scopedMap.entries()) {
           if (cached.publishedContractId === contractId || cached.contract.id === contractId) {
-            contractsMap.delete(existingKey);
+            scopedMap.delete(key);
+            removed = true;
+          }
+        }
+        for (const [key, cached] of legacyMap.entries()) {
+          if (cached.publishedContractId === contractId || cached.contract.id === contractId) {
+            legacyMap.delete(key);
             removed = true;
           }
         }
@@ -123,40 +182,43 @@ export function createContractCache(store: ContractCacheStore, logger: CacheLogg
         return;
       }
 
-      const validation = validateResolvedApiContract(contract.contractData);
-      if (validation.success) {
-        if (validation.data.runtime.schemaVersion !== SCHEMA_VERSION) {
-          logger.warn(`Contract ${contractId} uses unsupported schema version ${validation.data.runtime.schemaVersion}. Skipping.`);
-          return;
-        }
-
-        // Remove all old keys for this contract ID (endpoint or operations might have changed)
-        for (const [existingKey, cached] of contractsMap.entries()) {
-          if (cached.publishedContractId === contractId || cached.contract.id === contractId) {
-            contractsMap.delete(existingKey);
-          }
-        }
-        
-        const methods = getHttpMethodsForContract(validation.data);
-        for (const method of methods) {
-          const key = buildCacheKey(method, contract.endpointPath);
-          contractsMap.set(key, { publishedContractId: contract.id, contract: validation.data });
-        }
-      } else {
+      const validation = validateResolvedApiContract(row.contractData);
+      if (!validation.success) {
         logger.warn(
-          `Failed to validate contract schema during reload for contract ${contract.id}:`,
+          `Failed to validate contract schema during reload for contract ${row.id}:`,
           validation.issues
         );
+        return;
       }
+      if (validation.data.runtime.schemaVersion !== SCHEMA_VERSION) {
+        logger.warn(`Contract ${contractId} uses unsupported schema version ${validation.data.runtime.schemaVersion}. Skipping.`);
+        return;
+      }
+
+      // Evict all existing keys for this contract (endpoint or operations may have changed)
+      for (const [key, cached] of scopedMap.entries()) {
+        if (cached.publishedContractId === contractId || cached.contract.id === contractId) {
+          scopedMap.delete(key);
+        }
+      }
+      for (const [key, cached] of legacyMap.entries()) {
+        if (cached.publishedContractId === contractId || cached.contract.id === contractId) {
+          legacyMap.delete(key);
+        }
+      }
+
+      indexContract(row, validation.data, { scoped: scopedMap, legacy: legacyMap });
     },
 
     async reloadAllContracts() {
-      const oldMap = contractsMap;
+      const prevScoped = scopedMap;
+      const prevLegacy = legacyMap;
       try {
         await this.loadActiveContracts();
       } catch (error) {
         logger.error("Failed to reload all contracts. Keeping previous cache.", error);
-        contractsMap = oldMap;
+        scopedMap = prevScoped;
+        legacyMap = prevLegacy;
       }
     }
   };

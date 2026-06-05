@@ -25,7 +25,7 @@ Contract-driven REST APIs over legacy Oracle databases. Define explicit field ma
 | DELETE runtime support | DELETE operations are recognised in contracts but return 405 at runtime in the current MVP |
 | Safe includes / joins | Multi-table joins are not supported; model them in an Oracle view instead |
 | Connection pooling | The runtime uses a single persistent Oracle connection opened at startup |
-| Auth enforcement | The runtime uses a `PermissionChecker` interface; the permissive default allows all calls — wire your own |
+| JWT/OIDC auth | The runtime validates identity using a `PrincipalProvider`; the stub provider reads headers — wire a real JWT/OIDC provider for production |
 
 ---
 
@@ -44,6 +44,7 @@ Contract-driven REST APIs over legacy Oracle databases. Define explicit field ma
 - **Optimistic locking** — version-column or timestamp-column locking for both direct-table and procedure-backed updates
 - **Audit logging** — every runtime request, Oracle error, schema mismatch, and optimistic-lock conflict is written to `api_audit_logs`
 - **Oracle error translation** — ORA codes mapped to typed API errors; raw Oracle messages are never returned to callers
+- **Tenant-scoped runtime dispatch** — every `/api/*` request must authenticate and resolve a tenant; contracts are keyed by `tenantId + apiConnectionId + method + endpointPath`; the legacy path-only lookup is not used at runtime
 
 ---
 
@@ -328,6 +329,147 @@ Retirement is idempotent — retiring an already-retired contract is a no-op.
 - **No pagination on procedure-backed reads** — SYS_REFCURSOR reads are bounded by `pagination.maxLimit` (default 1000); OFFSET/FETCH is not applicable.
 - **Drift check requires a recent snapshot** — if no snapshot exists for the contract's owner, the drift check returns 422.
 - **Auth is permissive by default** — `createPermissiveChecker()` is wired at startup. Replace with a real implementation before production use.
+- **Runtime tenant resolution not enforced yet** — The runtime cache is now tenant-scoped internally (Phase 9d), but incoming `/api/*` requests are not yet required to carry tenant identity. The HTTP router still uses the legacy cache path until Phase 9e wires request-header tenant resolution. Do not begin multi-database runtime testing until Phase 9e is implemented.
+
+---
+
+## 15a. Phase 9a/9b — Auth Foundation and Tenant Metadata (added 2026-06-04)
+
+This release adds the tenant metadata store and authentication foundation required before multi-database testing. It does **not** change published contract scoping, the runtime cache key, or the runtime request lifecycle.
+
+### What was added
+
+| Area | What changed |
+| --- | --- |
+| Prisma models | `bridge_tenants`, `bridge_tenant_connections`, `bridge_user_tenant_access` |
+| Tenant admin APIs | CRUD under `/bridge/tenants/*` |
+| `Principal` type | `userId`, `username?`, `roles`, `tenantIds`, `permissions` |
+| `PrincipalProvider` interface | `resolvePrincipal(req): Principal \| null` |
+| `StubPrincipalProvider` | Reads identity from `x-bridge-user-id`, `x-bridge-tenant-id`, `x-bridge-roles`, `x-bridge-permissions` headers |
+| `TenantResolver` | Helper for Phase 9e; resolves `tenantId + apiConnectionId` from a principal |
+
+### What was intentionally NOT changed
+
+- `published_contracts` has no `tenant_id` or `api_connection_id` columns yet (Phase 9c)
+- Runtime cache key is still `method + endpointPath` (Phase 9d)
+- Runtime requests are not yet authenticated (Phase 9e)
+- Multi-database testing is still blocked
+
+### Tenant setup flow
+
+After running migrations (`pnpm --filter @project-bridge/api db:migrate:deploy`):
+
+```text
+1. POST /bridge/tenants                           — create a tenant
+2. POST /bridge/tenants/:id/connections           — assign an Oracle connection to the tenant
+3. POST /bridge/tenants/:id/users                 — assign a user to the tenant
+```
+
+See the `# TENANTS` section in `test.rest` for copy-paste request examples.
+
+### Headers used by StubPrincipalProvider (internal/dev only)
+
+| Header | Purpose |
+| --- | --- |
+| `x-bridge-user-id` | Required; identifies the calling user |
+| `x-bridge-username` | Optional display name |
+| `x-bridge-tenant-id` | Comma-separated tenant IDs the principal claims |
+| `x-bridge-roles` | Comma-separated roles |
+| `x-bridge-permissions` | Comma-separated permission strings |
+
+The stub provider does **not** validate a JWT. Do not expose it on public endpoints.
+
+---
+
+## 15b. Phase 9c — Tenant-aware Contract Publishing (added 2026-06-05)
+
+This release scopes every published contract to a tenant + Oracle connection pair. It does **not** change the runtime cache key or the runtime request lifecycle (those are Phase 9d/9e).
+
+### What was added
+
+| Area | What changed |
+| --- | --- |
+| Prisma schema | `published_contracts` gains nullable `tenant_id` and `api_connection_id` columns |
+| Uniqueness | Global `(resource_name, version)` and `(endpoint_path, version)` constraints replaced by `(tenant_id, api_connection_id, endpoint_path, version)` |
+| New indexes | Scoped lookup: `(tenant_id, api_connection_id, endpoint_path)`, `(…, status)`, `(…, oracle_owner, oracle_object_name)` |
+| Compiler | Validates tenant exists, is active, and connection is assigned to tenant when `store.bridgeTenant` is wired |
+| Publish API | `POST /bridge/contracts/drafts/:id/publish` now requires `tenantId` and `apiConnectionId` in the body |
+| Version sequencing | Version numbers are independent per `tenantId + apiConnectionId + resourceName` |
+| Deprecation scope | Deprecating a previous active contract is scoped to the same `tenantId + apiConnectionId + endpointPath`; tenant B's contract is never deprecated by tenant A's publish |
+| `resolved.runtime` | `tenantId` is now embedded in every newly compiled contract |
+
+### What was intentionally NOT changed
+
+- Runtime cache key was still `method + endpointPath` at this phase (fixed in Phase 9d — see below)
+- Runtime requests are not yet authenticated (Phase 9e)
+- Multi-database runtime testing is still blocked
+
+### Updated publish flow
+
+After running migrations, the full publish flow is:
+
+```text
+1. POST /bridge/tenants                           — create tenant
+2. POST /bridge/tenants/:id/connections           — assign Oracle connection (isDefault: true)
+3. POST /bridge/connections                       — create Oracle connection (if not done)
+4. POST /bridge/contracts/drafts                  — create draft
+5. POST /bridge/contracts/drafts/:id/publish      — publish with tenantId + apiConnectionId
+```
+
+Updated publish body (tenantId and apiConnectionId are now required):
+
+```json
+{
+  "publishedBy": "your-name",
+  "tenantId": "<tenant-uuid>",
+  "apiConnectionId": "<oracle-connection-uuid>",
+  "changeReason": "Initial publish"
+}
+```
+
+### Backward compatibility
+
+Existing published contracts in the database retain `tenant_id = NULL` and `api_connection_id = NULL`. They remain readable and cacheable. The PostgreSQL unique index treats NULLs as distinct, so legacy rows do not conflict with each other or with new tenant-scoped rows. All **new** publishes must supply `tenantId`.
+
+---
+
+## 15c. Phase 9d — Scoped Runtime Cache (added 2026-06-05)
+
+This release makes the runtime contract cache internally tenant-scoped. Incoming HTTP requests are **not yet** required to carry tenant identity (that is Phase 9e).
+
+### What was added
+
+| Area | What changed |
+| --- | --- |
+| Cache key | Changed from `METHOD:endpointPath` to `tenantId:apiConnectionId:METHOD:endpointPath` for scoped contracts |
+| Two cache maps | `scopedMap` (tenant+connection keyed) and `legacyMap` (path-only, backward compat) live side-by-side |
+| `getContractByScopedEndpoint` | New method on `ContractCache`; requires `tenantId + apiConnectionId + method + endpointPath` |
+| `getContractByEndpoint` | Retained as legacy path; resolves from `legacyMap` only |
+| `loadActiveContracts` | Scoped contracts (with `tenantId + apiConnectionId`) → `scopedMap`; legacy unscoped → `legacyMap` |
+| `reloadContract` | Evicts from both maps; reindexes under correct map based on tenant scoping |
+| `BridgeDispatchInput` | Optional `tenantId` and `apiConnectionId` fields (Option B); dispatcher uses scoped lookup when both present |
+| Tests | 10 new cache isolation tests; 4 new dispatcher scoped tests |
+
+### What was intentionally NOT changed
+
+- Runtime HTTP router (`/api/*`) still uses legacy path lookup — no tenant headers required yet (Phase 9e)
+- Authentication is not enforced on `/api/*` (Phase 9e)
+- Multi-database live runtime testing is still blocked (Phase 9e)
+- No Oracle business data was mutated; no runtime writes were run
+
+### Backward compatibility
+
+Existing published contracts in the database with `tenant_id = NULL` and `api_connection_id = NULL` load into the `legacyMap` and remain accessible via `getContractByEndpoint(method, path)`. Current single-db behavior is unchanged. Scoped contracts (with both fields set) are isolated to `scopedMap` and never bleed into the legacy lookup.
+
+### Next slice: Phase 9e — Runtime Tenant Resolution and Auth Enforcement
+
+Phase 9e will:
+
+- Parse `x-bridge-tenant-id` (or equivalent) from incoming `/api/*` request headers
+- Resolve `tenantId + apiConnectionId` via `TenantResolver`
+- Call `getContractByScopedEndpoint` in `resolveRuntimePath` and the read/write handlers
+- Enforce authentication before contract dispatch
+- Enable multi-database runtime testing
 
 ---
 

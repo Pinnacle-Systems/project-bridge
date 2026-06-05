@@ -1,4 +1,3 @@
-import type { ContractCache } from "../contracts/contract-cache.js";
 import type { OracleConnectorAdapter, BindValue } from "../connections/oracle-adapter.js";
 import type {
   ResolvedApiContract,
@@ -33,7 +32,6 @@ export type CursorLike = {
 // ─── Public types ───────────────────────────────────────────────────────
 
 export type CursorReadHandlerContext = {
-  cache: ContractCache;
   adapter: OracleConnectorAdapter;
   permissions: PermissionChecker;
   audit?: AuditLogger;
@@ -43,13 +41,16 @@ export type CursorReadHandlerContext = {
 };
 
 export type CursorReadHandlerInput = {
-  contractPath: string;
+  contract: ResolvedApiContract;
   /** IN params sent by the caller (e.g. id for read-by-id). */
   params?: Record<string, unknown>;
   identity?: RequestIdentity;
   requestId?: string;
   /** Override the contract-level maxRowLimit for this request. */
   maxRows?: number;
+  tenantId?: string;
+  apiConnectionId?: string;
+  publishedContractId?: string;
 };
 
 export type CursorReadHandlerOutput = {
@@ -67,13 +68,9 @@ const DEFAULT_MAX_ROWS = 1000;
 export function createCursorReadHandler(ctx: CursorReadHandlerContext) {
   return async function handle(input: CursorReadHandlerInput): Promise<CursorReadHandlerOutput> {
     const startedAt = Date.now();
-    // 1. Resolve contract
-    const contract = ctx.cache.getContractByEndpoint("GET", input.contractPath);
-    if (!contract) {
-      return { status: 404, body: { error: "No contract found for this endpoint." } };
-    }
+    const contract = input.contract;
 
-    // 2. Validate operation enabled and mode is package/procedure
+    // 1. Validate operation enabled and mode is package/procedure
     // Cursor reads always return a collection, so resolve against the "list" policy.
     const policy = contract.operations.find(op => op.operation === "list");
     if (!policy?.enabled) {
@@ -108,7 +105,10 @@ export function createCursorReadHandler(ctx: CursorReadHandlerContext) {
         status: "received",
         startedAt,
         requestId: input.requestId,
-        userId: input.identity?.userId
+        userId: input.identity?.userId,
+        tenantId: input.tenantId,
+        apiConnectionId: input.apiConnectionId,
+        publishedContractId: input.publishedContractId
       })
     });
 
@@ -160,6 +160,9 @@ export function createCursorReadHandler(ctx: CursorReadHandlerContext) {
           startedAt,
           requestId: input.requestId,
           userId: input.identity?.userId,
+          tenantId: input.tenantId,
+          apiConnectionId: input.apiConnectionId,
+          publishedContractId: input.publishedContractId,
           oracleErrorCode,
           code: translated.code
         })
@@ -174,6 +177,9 @@ export function createCursorReadHandler(ctx: CursorReadHandlerContext) {
             startedAt,
             requestId: input.requestId,
             userId: input.identity?.userId,
+            tenantId: input.tenantId,
+            apiConnectionId: input.apiConnectionId,
+            publishedContractId: input.publishedContractId,
             oracleErrorCode,
             code: translated.code
           })
@@ -235,6 +241,9 @@ export function createCursorReadHandler(ctx: CursorReadHandlerContext) {
           startedAt,
           requestId: input.requestId,
           userId: input.identity?.userId,
+          tenantId: input.tenantId,
+          apiConnectionId: input.apiConnectionId,
+          publishedContractId: input.publishedContractId,
           oracleErrorCode,
           code: translated.code
         })
@@ -249,6 +258,9 @@ export function createCursorReadHandler(ctx: CursorReadHandlerContext) {
             startedAt,
             requestId: input.requestId,
             userId: input.identity?.userId,
+            tenantId: input.tenantId,
+            apiConnectionId: input.apiConnectionId,
+            publishedContractId: input.publishedContractId,
             oracleErrorCode,
             code: translated.code
           })
@@ -274,6 +286,9 @@ export function createCursorReadHandler(ctx: CursorReadHandlerContext) {
         startedAt,
         requestId: input.requestId,
         userId: input.identity?.userId,
+        tenantId: input.tenantId,
+        apiConnectionId: input.apiConnectionId,
+        publishedContractId: input.publishedContractId,
         resultCount: mappedRows.length
       })
     });
@@ -286,6 +301,9 @@ export function createCursorReadHandler(ctx: CursorReadHandlerContext) {
         startedAt,
         requestId: input.requestId,
         userId: input.identity?.userId,
+        tenantId: input.tenantId,
+        apiConnectionId: input.apiConnectionId,
+        publishedContractId: input.publishedContractId,
         resultCount: mappedRows.length
       })
     });

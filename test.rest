@@ -525,13 +525,16 @@ GET {{baseUrl}}/bridge/diagnostics/audit?type=runtime.oracle.error&take=20
 x-admin-api-key: {{adminApiKey}}
 
 ###############################################################################
-# 13. TENANTS (Phase 9a/9b/9c — Auth Foundation + Tenant Metadata + Scoped Publishing)
+# 13. TENANTS (Phase 9a/9b/9c/9d — Auth Foundation + Tenant Metadata + Scoped Publishing + Scoped Cache)
 ###############################################################################
 # Phase 9c: published contracts are now scoped to a tenant + connection pair.
 # Create a tenant and assign a connection BEFORE publishing drafts (section 5).
 #
-# Runtime cache key is still method + endpointPath (Phase 9d will scope it).
-# Multi-database runtime testing is still blocked until Phase 9d–9e are complete.
+# Phase 9d (complete): runtime cache is now internally scoped by
+# tenantId + apiConnectionId + method + endpointPath.
+# Tenant A and tenant B can publish /currencies without collision.
+# Runtime HTTP requests do NOT yet require tenant headers (Phase 9e).
+# Multi-database runtime testing is still blocked until Phase 9e is complete.
 
 # @name Create Tenant
 # Creates a tenant record. code must be unique.
@@ -566,7 +569,7 @@ x-admin-api-key: {{adminApiKey}}
 # @name Assign Oracle Connection to Tenant
 # Links an existing api_connection to this tenant.
 # Set isDefault: true to make it the default connection for the tenant.
-# Phase 9d will use this to resolve the runtime Oracle connection from tenant identity.
+# Phase 9e will use this to resolve the runtime Oracle connection from tenant identity.
 POST {{baseUrl}}/bridge/tenants/{{tenantId}}/connections
 x-admin-api-key: {{adminApiKey}}
 Content-Type: application/json

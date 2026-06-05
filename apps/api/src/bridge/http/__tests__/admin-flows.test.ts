@@ -275,6 +275,7 @@ function makeCtx(overrides: Partial<BridgeHttpContext> = {}): BridgeHttpContext 
     cache: {
       loadActiveContracts:  vi.fn().mockResolvedValue(undefined),
       getContractByEndpoint: vi.fn().mockReturnValue(undefined),
+      getContractByScopedEndpoint: vi.fn().mockReturnValue(undefined),
       reloadContract:       vi.fn().mockResolvedValue(undefined),
       reloadAllContracts:   vi.fn().mockResolvedValue(undefined)
     },
@@ -498,12 +499,13 @@ describe("Admin flows", () => {
       cache: {
         loadActiveContracts: vi.fn(),
         getContractByEndpoint: vi.fn().mockReturnValue(undefined), // nothing published
+        getContractByScopedEndpoint: vi.fn().mockReturnValue(undefined),
         reloadContract: vi.fn(),
         reloadAllContracts: vi.fn()
       }
     });
     const dispatch = createRuntimeDispatcher(ctx);
-    const result = await dispatch({ method: "GET", contractPath: "/api/hr/employees" });
+    const result = await dispatch({ method: "GET", contractPath: "/api/hr/employees", tenantId: "t1", apiConnectionId: "c1" });
     expect(result.status).toBe(404);
     expect((result.body as any).error).toMatch(/no contract/i);
   });
@@ -518,7 +520,8 @@ describe("Admin flows", () => {
     const ctx = makeCtx({
       cache: {
         loadActiveContracts: vi.fn(),
-        getContractByEndpoint: vi.fn().mockReturnValue(contract),
+        getContractByEndpoint: vi.fn().mockReturnValue(undefined),
+        getContractByScopedEndpoint: vi.fn().mockReturnValue({ contract, publishedContractId: "pub-1" }),
         reloadContract: vi.fn(),
         reloadAllContracts: vi.fn()
       },
@@ -539,7 +542,7 @@ describe("Admin flows", () => {
     });
 
     const dispatch = createRuntimeDispatcher(ctx);
-    const result = await dispatch({ method: "GET", contractPath: "/api/hr/employees" });
+    const result = await dispatch({ method: "GET", contractPath: "/api/hr/employees", tenantId: "t1", apiConnectionId: "c1" });
 
     // Handler ran (not 404, not an error from the store spy)
     expect(result.status).not.toBe(404);
