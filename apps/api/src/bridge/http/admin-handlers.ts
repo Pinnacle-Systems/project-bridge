@@ -45,6 +45,14 @@ export type AdminHandlers = {
   // Diagnostics
   getCompilerDiagnostics(draftId?: string): Promise<AdminHandlerOutput>;
   getAuditLogs(query?: { type?: string; take?: string }): Promise<AdminHandlerOutput>;
+  // Tenants (Phase 9b)
+  createTenant(body: unknown): Promise<AdminHandlerOutput>;
+  listTenants(): Promise<AdminHandlerOutput>;
+  getTenant(id: string): Promise<AdminHandlerOutput>;
+  assignTenantConnection(tenantId: string, body: unknown): Promise<AdminHandlerOutput>;
+  listTenantConnections(tenantId: string): Promise<AdminHandlerOutput>;
+  assignTenantUser(tenantId: string, body: unknown): Promise<AdminHandlerOutput>;
+  listTenantUsers(tenantId: string): Promise<AdminHandlerOutput>;
 };
 
 export function createAdminHandlers(ctx: BridgeHttpContext): AdminHandlers {
@@ -311,12 +319,16 @@ export function createAdminHandlers(ctx: BridgeHttpContext): AdminHandlers {
     // ── Publish ──────────────────────────────────────────────────────────────
 
     async publishDraft(draftId, body) {
-      const { publishedBy, changeReason } = (body ?? {}) as {
+      const { publishedBy, tenantId, apiConnectionId, changeReason } = (body ?? {}) as {
         publishedBy?: string;
+        tenantId?: string;
+        apiConnectionId?: string;
         changeReason?: string;
       };
       if (!publishedBy) return { status: 400, body: { error: "publishedBy is required." } };
-      const result = await ctx.publisher.publishDraftContract(draftId, publishedBy, changeReason);
+      if (!tenantId) return { status: 400, body: { error: "tenantId is required." } };
+      if (!apiConnectionId) return { status: 400, body: { error: "apiConnectionId is required." } };
+      const result = await ctx.publisher.publishDraftContract(draftId, publishedBy, tenantId, changeReason);
       return { status: 201, body: { data: result.publishedContract } };
     },
 
@@ -451,6 +463,63 @@ export function createAdminHandlers(ctx: BridgeHttpContext): AdminHandlers {
         take
       });
       return { status: 200, body: { data: logs } };
+    },
+
+    // ── Tenants ──────────────────────────────────────────────────────────────
+
+    async createTenant(body) {
+      if (!ctx.tenants) return { status: 501, body: { error: "Tenant service not configured." } };
+      const { code, name } = (body ?? {}) as { code?: string; name?: string };
+      if (!code) return { status: 400, body: { error: "code is required." } };
+      if (!name) return { status: 400, body: { error: "name is required." } };
+      const tenant = await ctx.tenants.createTenant({ code, name });
+      return { status: 201, body: { data: tenant } };
+    },
+
+    async listTenants() {
+      if (!ctx.tenants) return { status: 501, body: { error: "Tenant service not configured." } };
+      const tenants = await ctx.tenants.listTenants();
+      return { status: 200, body: { data: tenants } };
+    },
+
+    async getTenant(id) {
+      if (!ctx.tenants) return { status: 501, body: { error: "Tenant service not configured." } };
+      const tenant = await ctx.tenants.getTenant(id);
+      if (!tenant) return { status: 404, body: { error: "Tenant not found." } };
+      return { status: 200, body: { data: tenant } };
+    },
+
+    async assignTenantConnection(tenantId, body) {
+      if (!ctx.tenants) return { status: 501, body: { error: "Tenant service not configured." } };
+      const { apiConnectionId, alias, isDefault } = (body ?? {}) as {
+        apiConnectionId?: string;
+        alias?: string;
+        isDefault?: boolean;
+      };
+      if (!apiConnectionId) return { status: 400, body: { error: "apiConnectionId is required." } };
+      const conn = await ctx.tenants.assignConnectionToTenant(tenantId, { apiConnectionId, alias, isDefault });
+      return { status: 201, body: { data: conn } };
+    },
+
+    async listTenantConnections(tenantId) {
+      if (!ctx.tenants) return { status: 501, body: { error: "Tenant service not configured." } };
+      const conns = await ctx.tenants.listTenantConnections(tenantId);
+      return { status: 200, body: { data: conns } };
+    },
+
+    async assignTenantUser(tenantId, body) {
+      if (!ctx.tenants) return { status: 501, body: { error: "Tenant service not configured." } };
+      const { userId, role } = (body ?? {}) as { userId?: string; role?: string };
+      if (!userId) return { status: 400, body: { error: "userId is required." } };
+      if (!role) return { status: 400, body: { error: "role is required." } };
+      const access = await ctx.tenants.assignUserToTenant(tenantId, { userId, role });
+      return { status: 201, body: { data: access } };
+    },
+
+    async listTenantUsers(tenantId) {
+      if (!ctx.tenants) return { status: 501, body: { error: "Tenant service not configured." } };
+      const users = await ctx.tenants.listUserTenantAccess(tenantId);
+      return { status: 200, body: { data: users } };
     }
   };
 }

@@ -19,6 +19,8 @@ import { createContractPublishService } from "./bridge/contracts/publish-contrac
 import { createOracleAwareContractCompiler } from "./bridge/compiler/index.js";
 import { createContractCache } from "./bridge/contracts/contract-cache.js";
 import { createPermissiveChecker } from "./bridge/runtime/permissions.js";
+import { createTenantService } from "./bridge/tenants/index.js";
+import { createStubPrincipalProvider } from "./bridge/auth/index.js";
 import type { BridgeHttpContext } from "./bridge/http/context.js";
 import type { AuditLogger } from "./bridge/audit/index.js";
 import { createApp } from "./app.js";
@@ -100,6 +102,7 @@ const capabilityDetector = createOracleCapabilityDetector({ store: prisma as any
 const drafts    = createDraftContractService(prisma as any, audit);
 const publisher = createContractPublishService(prisma as any, compiler, audit);
 const cache     = createContractCache(prisma as any);
+const tenants   = createTenantService(prisma as any);
 
 // ── Admin store adapter (maps prisma delegates to BridgeAdminStore) ───────────
 
@@ -132,7 +135,9 @@ const ctx: BridgeHttpContext = {
   permissions: createPermissiveChecker(),
   oracleBindTypes,
   audit,
-  store
+  store,
+  tenants,
+  auth: createStubPrincipalProvider()
 };
 
 // ── Boot ─────────────────────────────────────────────────────────────────────

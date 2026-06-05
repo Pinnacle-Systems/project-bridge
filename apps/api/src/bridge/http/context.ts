@@ -10,6 +10,8 @@ import type { PermissionChecker } from "../runtime/permissions.js";
 import type { AuditLogger } from "../audit/index.js";
 import type { OracleBindTypeRegistry } from "../runtime/oracle-helpers.js";
 import type { OraclePaginationStrategy } from "../contracts/index.js";
+import type { TenantService } from "../tenants/index.js";
+import type { PrincipalProvider } from "../auth/index.js";
 
 export type StoredCompilerDiagnostic = {
   id: string;
@@ -101,4 +103,7 @@ export type BridgeHttpContext = {
   paginationStrategy?: OraclePaginationStrategy;
   audit?: AuditLogger;
   store: BridgeAdminStore;
+  // Phase 9a/9b — tenant metadata and auth foundation (optional until fully wired in 9e)
+  tenants?: TenantService;
+  auth?: PrincipalProvider;
 };

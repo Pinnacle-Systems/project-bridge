@@ -268,6 +268,9 @@ function validateRuntime(value: unknown, path: string, issues: ContractValidatio
 
   requireString(value, "cacheKey", issues, path);
   requireString(value, "schemaVersion", issues, path);
+  if ("tenantId" in value && value.tenantId !== undefined) {
+    requireString(value, "tenantId", issues, path);
+  }
   if ("apiConnectionId" in value && value.apiConnectionId !== undefined) {
     requireString(value, "apiConnectionId", issues, path);
   }

@@ -40,10 +40,20 @@ export type ContractCompilerStore = {
       orderBy: { capturedAt: "desc" };
     }): Promise<{ snapshotData: OracleSchemaSnapshot } | null>;
   };
+  // Phase 9c: optional — when present, tenant validation is enforced at compile time
+  bridgeTenant?: {
+    findUnique(args: { where: { id: string } }): Promise<{ id: string; status: string } | null>;
+  };
+  bridgeTenantConnection?: {
+    findFirst(args: {
+      where: { tenantId: string; apiConnectionId: string };
+    }): Promise<{ id: string; status: string } | null>;
+  };
 };
 
 export type CompileDraftContractInput = {
   apiConnectionId: string;
+  tenantId?: string;  // Phase 9c: required when store.bridgeTenant is configured
   draft: DraftApiContract;
   version?: number;
   compiledBy?: string;
@@ -57,6 +67,38 @@ export function createOracleAwareContractCompiler(store: ContractCompilerStore):
   return {
     async compile(input) {
       const diagnostics: ContractCompilerDiagnostic[] = [];
+
+      // ── Tenant validation (Phase 9c) ───────────────────────────────────────
+      // Enforced only when the store provides bridgeTenant lookup.
+      if (store.bridgeTenant) {
+        if (!input.tenantId) {
+          diagnostics.push(error("TENANT_REQUIRED", "tenantId is required for contract compilation.", "tenantId"));
+          return { diagnostics };
+        }
+        const tenant = await store.bridgeTenant.findUnique({ where: { id: input.tenantId } });
+        if (!tenant) {
+          diagnostics.push(error("TENANT_NOT_FOUND", "Tenant does not exist.", "tenantId"));
+          return { diagnostics };
+        }
+        if (tenant.status !== "active") {
+          diagnostics.push(error("TENANT_INACTIVE", "Tenant is not active.", "tenantId"));
+          return { diagnostics };
+        }
+        if (store.bridgeTenantConnection) {
+          const tenantConn = await store.bridgeTenantConnection.findFirst({
+            where: { tenantId: input.tenantId, apiConnectionId: input.apiConnectionId }
+          });
+          if (!tenantConn) {
+            diagnostics.push(error("CONNECTION_NOT_ASSIGNED_TO_TENANT", "Oracle connection is not assigned to this tenant.", "apiConnectionId"));
+            return { diagnostics };
+          }
+          if (tenantConn.status !== "active") {
+            diagnostics.push(error("TENANT_CONNECTION_INACTIVE", "The tenant-connection assignment is inactive.", "apiConnectionId"));
+            return { diagnostics };
+          }
+        }
+      }
+
       const connection = await store.apiConnection.findUnique({ where: { id: input.apiConnectionId } });
       if (!connection) {
         diagnostics.push(error("CONNECTION_NOT_FOUND", "Oracle connection does not exist.", "apiConnectionId"));
@@ -129,6 +171,7 @@ export function createOracleAwareContractCompiler(store: ContractCompilerStore):
             sourceObject?.objectStatus === "VALID" || programUnit?.objectStatus === "VALID" ? "valid" : "unknown"
         },
         runtime: {
+          tenantId: input.tenantId,
           apiConnectionId: input.apiConnectionId,
           cacheKey: `${input.draft.endpoint}:v${input.version ?? 1}`,
           schemaVersion: SCHEMA_VERSION

@@ -26,7 +26,10 @@ const requiredTables = [
   "contract_publish_history",
   "compiler_diagnostics",
   "api_audit_logs",
-  "schema_drift_reports"
+  "schema_drift_reports",
+  "bridge_tenants",
+  "bridge_tenant_connections",
+  "bridge_user_tenant_access"
 ];
 
 describe("Bridge operational metadata schema", () => {
@@ -70,6 +73,74 @@ describe("Bridge operational metadata schema", () => {
     expect(migrations).toContain('ON "published_contracts" USING GIN ("contract_data")');
   });
 
+  // ── Phase 9c — Tenant-aware contract publishing ────────────────────────────
+
+  it("defines tenant_id column on published_contracts in Prisma", () => {
+    expect(schema).toContain('tenantId         String?                  @map("tenant_id") @db.Uuid');
+  });
+
+  it("defines api_connection_id column on published_contracts in Prisma", () => {
+    expect(schema).toContain('apiConnectionId  String?                  @map("api_connection_id") @db.Uuid');
+  });
+
+  it("defines scoped uniqueness on published_contracts in Prisma", () => {
+    expect(schema).toContain("@@unique([tenantId, apiConnectionId, endpointPath, version])");
+  });
+
+  it("defines tenant+connection+endpoint index on published_contracts in Prisma", () => {
+    expect(schema).toContain("@@index([tenantId, apiConnectionId, endpointPath])");
+  });
+
+  it("defines tenant+connection+status index on published_contracts in Prisma", () => {
+    expect(schema).toContain("@@index([tenantId, apiConnectionId, status])");
+  });
+
+  it("defines tenant+connection+oracle index on published_contracts in Prisma", () => {
+    expect(schema).toContain("@@index([tenantId, apiConnectionId, oracleOwner, oracleObjectName])");
+  });
+
+  it("defines BridgeTenant → PublishedContract reverse relation in Prisma", () => {
+    expect(schema).toContain("publishedContracts PublishedContract[]");
+  });
+
+  migrationIt("adds tenant_id column to published_contracts in migration SQL", () => {
+    expect(migrations).toContain('ALTER TABLE "published_contracts" ADD COLUMN "tenant_id" UUID');
+  });
+
+  migrationIt("adds api_connection_id column to published_contracts in migration SQL", () => {
+    expect(migrations).toContain('ALTER TABLE "published_contracts" ADD COLUMN "api_connection_id" UUID');
+  });
+
+  migrationIt("drops old global uniqueness constraints for published_contracts in migration SQL", () => {
+    expect(migrations).toContain('"published_contracts_resource_name_version_key"');
+    expect(migrations).toContain('"published_contracts_endpoint_path_version_key"');
+  });
+
+  migrationIt("adds scoped uniqueness index on published_contracts in migration SQL", () => {
+    expect(migrations).toContain('"published_contracts_tenant_conn_endpoint_version_key"');
+  });
+
+  migrationIt("adds tenant+connection+endpoint index on published_contracts in migration SQL", () => {
+    expect(migrations).toContain('"published_contracts_tenant_conn_endpoint_idx"');
+  });
+
+  migrationIt("adds tenant+connection+status index on published_contracts in migration SQL", () => {
+    expect(migrations).toContain('"published_contracts_tenant_conn_status_idx"');
+  });
+
+  migrationIt("adds tenant+connection+oracle index on published_contracts in migration SQL", () => {
+    expect(migrations).toContain('"published_contracts_tenant_conn_oracle_idx"');
+  });
+
+  migrationIt("adds FK from published_contracts to bridge_tenants in migration SQL", () => {
+    expect(migrations).toContain('"published_contracts_tenant_id_fkey"');
+    expect(migrations).toContain('REFERENCES "bridge_tenants"("id")');
+  });
+
+  migrationIt("adds FK from published_contracts to api_connections in migration SQL", () => {
+    expect(migrations).toContain('"published_contracts_api_connection_id_fkey"');
+  });
+
   it("defines unique connection names in Prisma", () => {
     expect(schema).toContain("@@unique([name])");
   });
@@ -84,5 +155,47 @@ describe("Bridge operational metadata schema", () => {
     expect(migrations).toContain("WHERE \"connection_type\" = 'tnsAlias'");
     expect(migrations).toContain('CREATE UNIQUE INDEX "api_connections_wallet_endpoint_key"');
     expect(migrations).toContain("WHERE \"connection_type\" = 'wallet'");
+  });
+
+  // ── Tenant metadata (Phase 9a/9b) ─────────────────────────────────────────
+
+  it("defines BridgeTenant model with required fields in Prisma", () => {
+    expect(schema).toContain('@@map("bridge_tenants")');
+    expect(schema).toContain("code        String                   @unique");
+    expect(schema).toContain("@@index([status])");
+  });
+
+  it("defines BridgeTenantConnection model with tenant relation and unique constraint in Prisma", () => {
+    expect(schema).toContain('@@map("bridge_tenant_connections")');
+    expect(schema).toContain("@@unique([tenantId, apiConnectionId])");
+  });
+
+  it("defines BridgeUserTenantAccess model with unique user+tenant constraint in Prisma", () => {
+    expect(schema).toContain('@@map("bridge_user_tenant_access")');
+    expect(schema).toContain("@@unique([userId, tenantId])");
+  });
+
+  migrationIt("creates tenant tables in migration SQL", () => {
+    expect(migrations).toContain('CREATE TABLE "bridge_tenants"');
+    expect(migrations).toContain('CREATE TABLE "bridge_tenant_connections"');
+    expect(migrations).toContain('CREATE TABLE "bridge_user_tenant_access"');
+  });
+
+  migrationIt("adds unique tenant code index in migration SQL", () => {
+    expect(migrations).toContain('CREATE UNIQUE INDEX "bridge_tenants_code_key"');
+  });
+
+  migrationIt("adds partial alias uniqueness index in migration SQL", () => {
+    expect(migrations).toContain('"bridge_tenant_connections_tenant_id_alias_key"');
+    expect(migrations).toContain('WHERE "alias" IS NOT NULL');
+  });
+
+  migrationIt("adds tenant FK constraints in migration SQL", () => {
+    expect(migrations).toContain('"bridge_tenant_connections_tenant_id_fkey"');
+    expect(migrations).toContain('"bridge_user_tenant_access_tenant_id_fkey"');
+  });
+
+  migrationIt("adds api_connection FK from bridge_tenant_connections in migration SQL", () => {
+    expect(migrations).toContain('"bridge_tenant_connections_api_connection_id_fkey"');
   });
 });

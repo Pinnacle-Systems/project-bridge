@@ -18,6 +18,8 @@ export type StoredDraftContract = {
 
 export type StoredPublishedContract = {
   id: string;
+  tenantId: string | null;         // Phase 9c: null for legacy pre-9c contracts
+  apiConnectionId: string | null;  // Phase 9c: null for legacy pre-9c contracts
   resourceName: string;
   version: number;
   endpointPath: string;

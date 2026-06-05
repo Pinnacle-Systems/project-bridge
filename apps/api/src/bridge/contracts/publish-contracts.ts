@@ -42,14 +42,28 @@ export type PublishContractStore = {
   };
   publishedContract: {
     findFirst(args: {
-      where: { resourceName?: string; endpointPath?: string; status?: string };
+      where: {
+        resourceName?: string;
+        endpointPath?: string;
+        status?: string;
+        tenantId?: string;
+        apiConnectionId?: string;
+      };
       orderBy?: { version?: "asc" | "desc" };
     }): Promise<StoredPublishedContract | null>;
     findMany(args: {
-      where: { resourceName?: string; endpointPath?: string; status?: string };
+      where: {
+        resourceName?: string;
+        endpointPath?: string;
+        status?: string;
+        tenantId?: string;
+        apiConnectionId?: string;
+      };
     }): Promise<StoredPublishedContract[]>;
     create(args: {
       data: {
+        tenantId?: string;
+        apiConnectionId?: string;
         resourceName: string;
         version: number;
         endpointPath: string;
@@ -102,7 +116,12 @@ export type PublishContractStore = {
 };
 
 export type ContractPublishService = {
-  publishDraftContract(draftId: string, publishedBy: string, changeReason?: string): Promise<ContractPublishResult>;
+  publishDraftContract(
+    draftId: string,
+    publishedBy: string,
+    tenantId: string,
+    changeReason?: string
+  ): Promise<ContractPublishResult>;
 };
 
 export function createContractPublishService(
@@ -111,14 +130,18 @@ export function createContractPublishService(
   audit?: AuditLogger
 ): ContractPublishService {
   return {
-    async publishDraftContract(draftId, publishedBy, changeReason) {
+    async publishDraftContract(draftId, publishedBy, tenantId, changeReason) {
       const draft = await store.apiContractDraft.findUnique({ where: { id: draftId } });
       if (!draft) {
         throw new Error(`Draft contract not found: ${draftId}`);
       }
 
+      // Version sequencing is scoped to the same tenant + connection + resource.
+      // Two tenants can both have resource "employees" at version 1 independently.
       const latest = await store.publishedContract.findFirst({
         where: {
+          tenantId,
+          apiConnectionId: draft.apiConnectionId,
           resourceName: draft.resourceName
         },
         orderBy: { version: "desc" }
@@ -126,6 +149,7 @@ export function createContractPublishService(
       const version = (latest?.version ?? 0) + 1;
       const compileResult = await compiler.compile({
         apiConnectionId: draft.apiConnectionId,
+        tenantId,
         draft: draft.draftData as DraftApiContract,
         version,
         compiledBy: publishedBy
@@ -161,9 +185,12 @@ export function createContractPublishService(
         throw new Error("Resolved contract failed meta-schema validation.");
       }
 
+      // Deprecate only contracts within the SAME tenant + connection + endpoint scope.
+      // Tenant A's active /currencies contract is never deprecated by tenant B's publish.
       const previousActive = await store.publishedContract.findMany({
         where: {
-          resourceName: draft.resourceName,
+          tenantId,
+          apiConnectionId: draft.apiConnectionId,
           endpointPath: draft.endpointPath,
           status: "active"
         }
@@ -190,6 +217,8 @@ export function createContractPublishService(
 
       const publishedContract = await store.publishedContract.create({
         data: {
+          tenantId,
+          apiConnectionId: draft.apiConnectionId,
           resourceName: draft.resourceName,
           version,
           endpointPath: draft.endpointPath,

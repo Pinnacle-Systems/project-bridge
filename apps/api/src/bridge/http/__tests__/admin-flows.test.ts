@@ -59,6 +59,8 @@ function storedDraft(id = "draft-1"): StoredDraftContract {
 function storedPublished(id = "pub-1"): StoredPublishedContract {
   return {
     id,
+    tenantId: null,
+    apiConnectionId: null,
     resourceName: "employees",
     version: 1,
     endpointPath: "/api/hr/employees",
@@ -433,12 +435,38 @@ describe("Admin flows", () => {
   it("8. POST /bridge/contracts/drafts/:id/publish publishes and returns the published contract", async () => {
     const ctx = makeCtx();
     const h = createAdminHandlers(ctx);
-    const result = await h.publishDraft("draft-1", { publishedBy: "admin" });
+    const tenantId = "11111111-1111-1111-1111-111111111111";
+    const apiConnectionId = "22222222-2222-2222-2222-222222222222";
+    const result = await h.publishDraft("draft-1", { publishedBy: "admin", tenantId, apiConnectionId });
     expect(result.status).toBe(201);
     const pub = (result.body as any).data as StoredPublishedContract;
     expect(pub.id).toBe("pub-1");
     expect(pub.status).toBe("active");
-    expect(ctx.publisher.publishDraftContract).toHaveBeenCalledWith("draft-1", "admin", undefined);
+    expect(ctx.publisher.publishDraftContract).toHaveBeenCalledWith("draft-1", "admin", tenantId, undefined);
+  });
+
+  it("8a. POST /bridge/contracts/drafts/:id/publish returns 400 when tenantId is missing", async () => {
+    const ctx = makeCtx();
+    const h = createAdminHandlers(ctx);
+    const result = await h.publishDraft("draft-1", {
+      publishedBy: "admin",
+      apiConnectionId: "22222222-2222-2222-2222-222222222222"
+    });
+    expect(result.status).toBe(400);
+    expect((result.body as any).error).toMatch(/tenantId/);
+    expect(ctx.publisher.publishDraftContract).not.toHaveBeenCalled();
+  });
+
+  it("8b. POST /bridge/contracts/drafts/:id/publish returns 400 when apiConnectionId is missing", async () => {
+    const ctx = makeCtx();
+    const h = createAdminHandlers(ctx);
+    const result = await h.publishDraft("draft-1", {
+      publishedBy: "admin",
+      tenantId: "11111111-1111-1111-1111-111111111111"
+    });
+    expect(result.status).toBe(400);
+    expect((result.body as any).error).toMatch(/apiConnectionId/);
+    expect(ctx.publisher.publishDraftContract).not.toHaveBeenCalled();
   });
 
   // Test 9

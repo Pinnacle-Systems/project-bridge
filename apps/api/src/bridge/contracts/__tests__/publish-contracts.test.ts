@@ -96,21 +96,27 @@ function createMemoryStore(draft = draftRecord()) {
     publishedContract: {
       async findFirst({ where }) {
         const matches = publishedContracts
-          .filter((contract) => !where.resourceName || contract.resourceName === where.resourceName)
-          .filter((contract) => !where.endpointPath || contract.endpointPath === where.endpointPath)
-          .filter((contract) => !where.status || contract.status === where.status)
-          .sort((left, right) => right.version - left.version);
+          .filter((c) => !where.resourceName || c.resourceName === where.resourceName)
+          .filter((c) => !where.endpointPath || c.endpointPath === where.endpointPath)
+          .filter((c) => !where.status || c.status === where.status)
+          .filter((c) => !where.tenantId || c.tenantId === where.tenantId)
+          .filter((c) => !where.apiConnectionId || c.apiConnectionId === where.apiConnectionId)
+          .sort((a, b) => b.version - a.version);
         return matches[0] ?? null;
       },
       async findMany({ where }) {
         return publishedContracts
-          .filter((contract) => !where.resourceName || contract.resourceName === where.resourceName)
-          .filter((contract) => !where.endpointPath || contract.endpointPath === where.endpointPath)
-          .filter((contract) => !where.status || contract.status === where.status);
+          .filter((c) => !where.resourceName || c.resourceName === where.resourceName)
+          .filter((c) => !where.endpointPath || c.endpointPath === where.endpointPath)
+          .filter((c) => !where.status || c.status === where.status)
+          .filter((c) => !where.tenantId || c.tenantId === where.tenantId)
+          .filter((c) => !where.apiConnectionId || c.apiConnectionId === where.apiConnectionId);
       },
       async create({ data }) {
         const published: StoredPublishedContract = {
           id: `published-${publishedContracts.length + 1}`,
+          tenantId: data.tenantId ?? null,
+          apiConnectionId: data.apiConnectionId ?? null,
           resourceName: data.resourceName,
           version: data.version,
           endpointPath: data.endpointPath,
@@ -172,7 +178,7 @@ function createMemoryStore(draft = draftRecord()) {
 function createCompiler(options: { valid?: boolean } = {}): ContractCompiler {
   const valid = options.valid ?? true;
   return {
-    compile: vi.fn(async ({ version, compiledBy }): Promise<ContractCompileResult> => {
+    compile: vi.fn(async ({ version, compiledBy, tenantId, apiConnectionId }): Promise<ContractCompileResult> => {
       if (!valid) {
         return {
           diagnostics: [
@@ -186,19 +192,30 @@ function createCompiler(options: { valid?: boolean } = {}): ContractCompiler {
         };
       }
       return {
-        contract: resolvedContract(version ?? 1, { publishedBy: compiledBy }),
+        contract: resolvedContract(version ?? 1, {
+          publishedBy: compiledBy,
+          runtime: {
+            tenantId,
+            apiConnectionId,
+            cacheKey: `/api/hr/employees:v${version ?? 1}`,
+            schemaVersion: "1"
+          }
+        }),
         diagnostics: [{ code: "CONTRACT_COMPILED", severity: "info", message: "Compiled." }]
       };
     })
   };
 }
 
+const TENANT_A = "tenant-a-uuid";
+const TENANT_B = "tenant-b-uuid";
+
 describe("contract publish workflow", () => {
   it("publishes a valid draft", async () => {
     const { store, publishedContracts, versions, histories } = createMemoryStore();
     const service = createContractPublishService(store, createCompiler());
 
-    const result = await service.publishDraftContract("draft-1", "admin", "Initial publish");
+    const result = await service.publishDraftContract("draft-1", "admin", TENANT_A, "Initial publish");
 
     expect(result.publishedContract).toMatchObject({
       id: "published-1",
@@ -212,11 +229,32 @@ describe("contract publish workflow", () => {
     expect(result.historyRecord.notes).toBe("Initial publish");
   });
 
+  it("stores tenantId and apiConnectionId on the published contract row", async () => {
+    const { store, publishedContracts } = createMemoryStore();
+    const service = createContractPublishService(store, createCompiler());
+
+    await service.publishDraftContract("draft-1", "admin", TENANT_A);
+
+    expect(publishedContracts[0].tenantId).toBe(TENANT_A);
+    expect(publishedContracts[0].apiConnectionId).toBe("connection-1");
+  });
+
+  it("resolved contract runtime contains tenantId and apiConnectionId", async () => {
+    const { store } = createMemoryStore();
+    const service = createContractPublishService(store, createCompiler());
+
+    const result = await service.publishDraftContract("draft-1", "admin", TENANT_A);
+    const contractData = result.publishedContract.contractData as ResolvedApiContract;
+
+    expect(contractData.runtime.tenantId).toBe(TENANT_A);
+    expect(contractData.runtime.apiConnectionId).toBe("connection-1");
+  });
+
   it("does not publish invalid drafts and stores diagnostics", async () => {
     const { store, publishedContracts, diagnostics } = createMemoryStore();
     const service = createContractPublishService(store, createCompiler({ valid: false }));
 
-    await expect(service.publishDraftContract("draft-1", "admin", "Bad publish")).rejects.toThrow(
+    await expect(service.publishDraftContract("draft-1", "admin", TENANT_A, "Bad publish")).rejects.toThrow(
       "failed compilation"
     );
 
@@ -235,7 +273,7 @@ describe("contract publish workflow", () => {
     const { store } = createMemoryStore();
     const service = createContractPublishService(store, createCompiler());
 
-    const result = await service.publishDraftContract("draft-1", "admin");
+    const result = await service.publishDraftContract("draft-1", "admin", TENANT_A);
 
     expect(result.publishedContract.version).toBe(1);
     expect(result.versionRecord.version).toBe(1);
@@ -245,8 +283,8 @@ describe("contract publish workflow", () => {
     const { store, publishedContracts } = createMemoryStore();
     const service = createContractPublishService(store, createCompiler());
 
-    await service.publishDraftContract("draft-1", "admin", "v1");
-    const second = await service.publishDraftContract("draft-1", "admin", "v2");
+    await service.publishDraftContract("draft-1", "admin", TENANT_A, "v1");
+    const second = await service.publishDraftContract("draft-1", "admin", TENANT_A, "v2");
 
     expect(second.publishedContract.version).toBe(2);
     expect(second.deprecatedPrevious).toHaveLength(1);
@@ -257,8 +295,8 @@ describe("contract publish workflow", () => {
     const { store, versions, histories } = createMemoryStore();
     const service = createContractPublishService(store, createCompiler());
 
-    await service.publishDraftContract("draft-1", "admin", "v1");
-    await service.publishDraftContract("draft-1", "admin", "v2");
+    await service.publishDraftContract("draft-1", "admin", TENANT_A, "v1");
+    await service.publishDraftContract("draft-1", "admin", TENANT_A, "v2");
 
     expect(versions.map((version) => version.version)).toEqual([1, 2]);
     expect(versions[0].publishedContractId).toBe("published-1");
@@ -269,8 +307,67 @@ describe("contract publish workflow", () => {
     const { store } = createMemoryStore();
     const service = createContractPublishService(store, createCompiler());
 
-    const result = await service.publishDraftContract("draft-1", "admin");
+    const result = await service.publishDraftContract("draft-1", "admin", TENANT_A);
 
     expect(validateResolvedApiContract(result.publishedContract.contractData).success).toBe(true);
+  });
+
+  // ── Phase 9c — Cross-tenant isolation ───────────────────────────────────────
+
+  it("tenant A and tenant B can both publish the same endpoint path without collision", async () => {
+    const { store, publishedContracts } = createMemoryStore();
+    const service = createContractPublishService(store, createCompiler());
+
+    // Both tenants publish the same endpoint /api/hr/employees using the same connection
+    await service.publishDraftContract("draft-1", "admin", TENANT_A);
+    await service.publishDraftContract("draft-1", "admin", TENANT_B);
+
+    expect(publishedContracts).toHaveLength(2);
+    expect(publishedContracts[0].tenantId).toBe(TENANT_A);
+    expect(publishedContracts[1].tenantId).toBe(TENANT_B);
+    // Both at version 1 — independent versioning per tenant
+    expect(publishedContracts[0].version).toBe(1);
+    expect(publishedContracts[1].version).toBe(1);
+  });
+
+  it("publishing a new version for tenant A does not deprecate tenant B's active contract", async () => {
+    const { store, publishedContracts } = createMemoryStore();
+    const service = createContractPublishService(store, createCompiler());
+
+    // Tenant A publishes v1
+    await service.publishDraftContract("draft-1", "admin", TENANT_A, "a-v1");
+    // Tenant B publishes v1
+    await service.publishDraftContract("draft-1", "admin", TENANT_B, "b-v1");
+    // Tenant A publishes v2 — should deprecate only tenant A's v1
+    const result = await service.publishDraftContract("draft-1", "admin", TENANT_A, "a-v2");
+
+    expect(result.deprecatedPrevious).toHaveLength(1);
+    expect(result.deprecatedPrevious[0].tenantId).toBe(TENANT_A);
+
+    const tenantBContract = publishedContracts.find((c) => c.tenantId === TENANT_B);
+    expect(tenantBContract?.status).toBe("active");
+
+    const tenantAV1 = publishedContracts.find((c) => c.tenantId === TENANT_A && c.version === 1);
+    expect(tenantAV1?.status).toBe("deprecated");
+  });
+
+  it("version sequences are independent per tenant", async () => {
+    const { store, publishedContracts } = createMemoryStore();
+    const service = createContractPublishService(store, createCompiler());
+
+    await service.publishDraftContract("draft-1", "admin", TENANT_A, "a-v1");
+    await service.publishDraftContract("draft-1", "admin", TENANT_A, "a-v2");
+    await service.publishDraftContract("draft-1", "admin", TENANT_B, "b-v1");
+
+    const tenantAVersions = publishedContracts
+      .filter((c) => c.tenantId === TENANT_A)
+      .map((c) => c.version)
+      .sort();
+    const tenantBVersions = publishedContracts
+      .filter((c) => c.tenantId === TENANT_B)
+      .map((c) => c.version);
+
+    expect(tenantAVersions).toEqual([1, 2]);
+    expect(tenantBVersions).toEqual([1]);
   });
 });

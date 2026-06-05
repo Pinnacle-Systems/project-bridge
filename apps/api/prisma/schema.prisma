@@ -76,6 +76,8 @@ model ApiContractDraft {
 
 model PublishedContract {
   id               String                   @id @default(uuid()) @db.Uuid
+  tenantId         String?                  @map("tenant_id") @db.Uuid
+  apiConnectionId  String?                  @map("api_connection_id") @db.Uuid
   resourceName     String                   @map("resource_name") @db.VarChar(100)
   version          Int
   endpointPath     String                   @map("endpoint_path") @db.VarChar(255)
@@ -88,15 +90,21 @@ model PublishedContract {
   publishedBy      String?                  @map("published_by") @db.VarChar(100)
   createdAt        DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+  tenant           BridgeTenant?            @relation(fields: [tenantId], references: [id], onDelete: SetNull)
   versions         ApiContractVersion[]
   publishHistory   ContractPublishHistory[]
   driftReports     SchemaDriftReport[]
 
-  @@unique([resourceName, version])
-  @@unique([endpointPath, version])
+  // Scoped uniqueness: two tenants may publish the same endpoint path safely.
+  // NULLs are not considered equal in PostgreSQL unique indexes, so legacy rows
+  // (tenant_id IS NULL) do not conflict with each other.
+  @@unique([tenantId, apiConnectionId, endpointPath, version])
   @@index([status])
   @@index([endpointPath])
   @@index([oracleOwner, oracleObjectName])
+  @@index([tenantId, apiConnectionId, endpointPath])
+  @@index([tenantId, apiConnectionId, status])
+  @@index([tenantId, apiConnectionId, oracleOwner, oracleObjectName])
   @@index([contractData], type: Gin, map: "published_contracts_contract_data_gin_idx")
   @@map("published_contracts")
 }
@@ -179,4 +187,58 @@ model SchemaDriftReport {
   @@index([status])
   @@index([checkedAt])
   @@map("schema_drift_reports")
+}
+
+// ── Tenant metadata (Phase 9a/9b) ────────────────────────────────────────────
+
+model BridgeTenant {
+  id          String                   @id @default(uuid()) @db.Uuid
+  code        String                   @unique @db.VarChar(100)
+  name        String                   @db.VarChar(255)
+  status      String                   @default("active") @db.VarChar(30)
+  createdAt   DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+  connections        BridgeTenantConnection[]
+  userAccess         BridgeUserTenantAccess[]
+  publishedContracts PublishedContract[]
+
+  @@index([status])
+  @@map("bridge_tenants")
+}
+
+model BridgeTenantConnection {
+  id              String       @id @default(uuid()) @db.Uuid
+  tenantId        String       @map("tenant_id") @db.Uuid
+  apiConnectionId String       @map("api_connection_id") @db.Uuid
+  alias           String?      @db.VarChar(100)
+  isDefault       Boolean      @default(false) @map("is_default")
+  status          String       @default("active") @db.VarChar(30)
+  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  tenant          BridgeTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // DB-level partial unique index on (tenant_id, alias) WHERE alias IS NOT NULL
+  // is created in migration SQL — Prisma DSL does not support partial unique indexes.
+  @@unique([tenantId, apiConnectionId])
+  @@index([tenantId])
+  @@index([apiConnectionId])
+  @@index([tenantId, isDefault])
+  @@map("bridge_tenant_connections")
+}
+
+model BridgeUserTenantAccess {
+  id        String       @id @default(uuid()) @db.Uuid
+  userId    String       @map("user_id") @db.VarChar(100)
+  tenantId  String       @map("tenant_id") @db.Uuid
+  role      String       @db.VarChar(100)
+  status    String       @default("active") @db.VarChar(30)
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  tenant    BridgeTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tenantId])
+  @@index([userId])
+  @@index([tenantId])
+  @@index([status])
+  @@map("bridge_user_tenant_access")
 }

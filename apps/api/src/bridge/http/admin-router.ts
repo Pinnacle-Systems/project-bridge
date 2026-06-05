@@ -104,7 +104,7 @@ export function createAdminRouter(ctx: BridgeHttpContext): Router {
   wire(router, "get",    "/contracts/drafts/:id",              req => h.getDraft(uuidParam(req.params.id)));
   wire(router, "patch",  "/contracts/drafts/:id",              req => h.updateDraft(uuidParam(req.params.id), req.body));
   wire(router, "post",   "/contracts/drafts/:id/archive",      req => h.archiveDraft(uuidParam(req.params.id)));
-  wire(router, "post",   "/contracts/drafts/:id/publish",      req => h.publishDraft(uuidParam(req.params.id), req.body));
+  wire(router, "post",   "/contracts/drafts/:id/publish",      req => h.publishDraft(uuidParam(req.params.id), bodyWithUuidField(bodyWithUuidField(req.body, "tenantId"), "apiConnectionId")));
 
   // ── Compiler ───────────────────────────────────────────────────────────────
   wire(router, "post",   "/compiler/validate",                 req => h.validateDraft(req.body));
@@ -123,6 +123,15 @@ export function createAdminRouter(ctx: BridgeHttpContext): Router {
   // ── Diagnostics ────────────────────────────────────────────────────────────
   wire(router, "get",    "/diagnostics/compiler",              req => h.getCompilerDiagnostics(optionalUuidQuery(req.query.draftId, "draftId")));
   wire(router, "get",    "/diagnostics/audit",                 req => h.getAuditLogs(req.query as Record<string, string>));
+
+  // ── Tenants (Phase 9b) ─────────────────────────────────────────────────────
+  wire(router, "post",   "/tenants",                           req => h.createTenant(req.body));
+  wire(router, "get",    "/tenants",                           ()  => h.listTenants());
+  wire(router, "get",    "/tenants/:id",                       req => h.getTenant(uuidParam(req.params.id)));
+  wire(router, "post",   "/tenants/:id/connections",           req => h.assignTenantConnection(uuidParam(req.params.id), req.body));
+  wire(router, "get",    "/tenants/:id/connections",           req => h.listTenantConnections(uuidParam(req.params.id)));
+  wire(router, "post",   "/tenants/:id/users",                 req => h.assignTenantUser(uuidParam(req.params.id), req.body));
+  wire(router, "get",    "/tenants/:id/users",                 req => h.listTenantUsers(uuidParam(req.params.id)));
 
   return router;
 }

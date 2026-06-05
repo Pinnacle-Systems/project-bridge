@@ -226,6 +226,8 @@ captured_by       VARCHAR(100)
 ```sql
 CREATE TABLE published_contracts (
     id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES bridge_tenants(id),
+    api_connection_id UUID NOT NULL REFERENCES api_connections(id),
     resource_name VARCHAR(100) NOT NULL,
     version INT NOT NULL,
     endpoint_path VARCHAR(255) NOT NULL,
@@ -239,23 +241,45 @@ CREATE TABLE published_contracts (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    UNIQUE (resource_name, version),
-    UNIQUE (endpoint_path, version)
+    -- Scoped uniqueness: two tenants may expose the same endpoint path safely
+    UNIQUE (tenant_id, api_connection_id, endpoint_path, version)
 );
+```
+
+Active uniqueness (enforced at publish time, not by DB constraint):
+
+```text
+Only one active contract may exist per:
+  tenant_id + api_connection_id + HTTP method + endpoint_path
+
+Publishing a new version must retire or deprecate the previous active
+contract for the same tenant + connection + method + path combination.
 ```
 
 ## 5.5 Suggested Indexes
 
 ```sql
+-- Active contracts by status (runtime cache load)
 CREATE INDEX idx_published_contracts_status
 ON published_contracts (status);
 
-CREATE INDEX idx_published_contracts_endpoint
-ON published_contracts (endpoint_path);
+-- Scoped active lookup (runtime resolution)
+CREATE INDEX idx_published_contracts_tenant_conn_endpoint
+ON published_contracts (tenant_id, api_connection_id, endpoint_path);
 
-CREATE INDEX idx_published_contracts_oracle_object
-ON published_contracts (oracle_owner, oracle_object_name);
+-- All contracts for a tenant + connection (admin listing)
+CREATE INDEX idx_published_contracts_tenant_conn_status
+ON published_contracts (tenant_id, api_connection_id, status);
 
+-- All contracts for a tenant (tenant admin view)
+CREATE INDEX idx_published_contracts_tenant_status
+ON published_contracts (tenant_id, status);
+
+-- Oracle object lookup within a tenant + connection (drift check)
+CREATE INDEX idx_published_contracts_tenant_conn_oracle_object
+ON published_contracts (tenant_id, api_connection_id, oracle_owner, oracle_object_name);
+
+-- JSONB contract internals (admin search by source table name etc.)
 CREATE INDEX idx_published_contracts_contract_data_gin
 ON published_contracts
 USING GIN (contract_data);
@@ -299,20 +323,32 @@ That would create unnecessary latency and make the metadata DB a runtime bottlen
 On startup:
 - load all active published contracts from Postgres
 - validate schema version compatibility
-- build in-memory endpoint map
+- build in-memory contract map keyed by:
+    tenantId + apiConnectionId + method + endpointPath
 
 On request:
-- resolve contract from memory
+- authenticate user and resolve tenant + apiConnectionId (see section 38.6)
+- resolve contract from memory using the scoped cache key
 - execute request using cached resolved contract
 
 On publish/deprecate:
-- refresh affected contract
+- refresh affected contract entry (scoped key only)
 - or reload full contract cache
 
 On metadata DB outage:
 - continue using last known good cache
 - alert operator
 ```
+
+**Cache key rule:**
+
+The cache key is always:
+
+```text
+tenantId + apiConnectionId + method + endpointPath
+```
+
+Path-only resolution is never used for multi-database or multi-tenant environments. For an internal single-database instance with a single configured default tenant and connection, the tenantId and apiConnectionId may be resolved automatically from the instance configuration — but the scoped key still applies internally. The lookup is never globally keyed on endpoint path alone.
 
 ## 6.3 Cache Refresh Options
 
@@ -343,10 +379,12 @@ distributed config cache
 
 ```text
 [ ] Runtime loads active contracts on startup
-[ ] Runtime resolves routes from in-memory cache
+[ ] Runtime cache is keyed by tenantId + apiConnectionId + method + endpointPath
+[ ] Runtime resolves contracts from the scoped in-memory cache
 [ ] Runtime does not query Postgres per API request
-[ ] Published contract changes can refresh runtime cache
+[ ] Published contract changes can refresh the affected scoped cache entry
 [ ] Runtime can continue with last known good contracts if Postgres is temporarily unavailable
+[ ] Two tenants with the same endpoint path resolve to different contracts without collision
 ```
 
 ---
@@ -1530,38 +1568,48 @@ Raw Oracle errors are often cryptic and may leak internal schema details. The de
 ## 22.1 Read/List Flow
 
 ```text
-1. Resolve endpoint from in-memory contract cache
-2. Authenticate user
-3. Check operation permission
-4. Apply row/scope permission
-5. Validate filters
-6. Validate sorting
-7. Apply pagination
-8. Generate Oracle SQL or PL/SQL call
-9. Execute using bind variables
-10. Map Oracle values to API fields
-11. Apply type transformers
-12. Hide/mask unauthorized fields
-13. Return response
-14. Write audit log
+1.  Authenticate user
+2.  Build Principal (userId, roles, tenantIds, permissions)
+3.  Resolve tenant from verified token or trusted internal header
+4.  Verify user has access to resolved tenant
+5.  Resolve apiConnectionId for tenant (default or alias)
+6.  Resolve contract from scoped cache:
+      key = tenantId + apiConnectionId + method + endpointPath
+7.  Check operation permission against Principal
+8.  Apply row/scope permission
+9.  Validate filters
+10. Validate sorting
+11. Apply pagination
+12. Generate Oracle SQL or PL/SQL call
+13. Execute using bind variables
+14. Map Oracle values to API fields
+15. Apply type transformers
+16. Hide/mask unauthorized fields
+17. Return response
+18. Write audit log (userId, tenantId, apiConnectionId, contractVersion)
 ```
 
 ## 22.2 Create/Update Flow
 
 ```text
-1. Resolve endpoint from in-memory contract cache
-2. Authenticate user
-3. Check operation permission
-4. Reject unknown fields
-5. Check field write permissions
-6. Run field validations
-7. Run cross-field validations
-8. Apply type transformers from API → Oracle
-9. Apply optimistic locking if enabled
-10. Execute package/procedure or direct table SQL
-11. Translate Oracle errors
-12. Map response back to API shape
-13. Write audit log
+1.  Authenticate user
+2.  Build Principal (userId, roles, tenantIds, permissions)
+3.  Resolve tenant from verified token or trusted internal header
+4.  Verify user has access to resolved tenant
+5.  Resolve apiConnectionId for tenant (default or alias)
+6.  Resolve contract from scoped cache:
+      key = tenantId + apiConnectionId + method + endpointPath
+7.  Check operation permission against Principal
+8.  Reject unknown fields
+9.  Check field write permissions
+10. Run field validations
+11. Run cross-field validations
+12. Apply type transformers from API → Oracle
+13. Apply optimistic locking if enabled
+14. Execute package/procedure or direct table SQL
+15. Translate Oracle errors
+16. Map response back to API shape
+17. Write audit log (userId, tenantId, apiConnectionId, contractVersion)
 ```
 
 ---
@@ -1604,6 +1652,8 @@ immutable
     "name": "EMPLOYEE_MASTER"
   },
   "runtime": {
+    "tenantId": "tenant_hrms",
+    "apiConnectionId": "959870a7-9d9c-4bd8-8be3-b4ca09320231",
     "compilerVersion": "1.0.0",
     "contractSchemaVersion": "1.0.0",
     "publishedAt": "2026-05-06T10:30:00Z",
@@ -1670,7 +1720,10 @@ immutable
 ```text
 validate draft config structure
 validate against resolved contract meta-schema
-check endpoint uniqueness
+validate tenant exists and is active
+validate apiConnectionId belongs to tenant (bridge_tenant_connections)
+check scoped endpoint uniqueness:
+  no active contract exists for tenant_id + api_connection_id + method + endpoint_path
 verify Oracle connection exists
 verify owner/schema exists
 verify source object exists
@@ -1686,6 +1739,7 @@ verify transformer configuration
 verify optimistic locking field
 verify filters and sorts reference mapped fields
 verify permissions are defined
+embed tenantId and apiConnectionId in resolved contract runtime metadata
 generate resolved runtime contract
 ```
 
@@ -1736,6 +1790,8 @@ Retired
 Track:
 
 ```text
+tenant_id
+api_connection_id
 resource
 version
 endpoint
@@ -1754,10 +1810,13 @@ schema snapshot reference
 ## 25.3 Publishing Rules
 
 ```text
+Publish requires tenantId and apiConnectionId.
 Draft contracts are never used at runtime.
 Published contracts are immutable.
 A new publish creates a new version.
 Runtime loads only active published contracts.
+Scoped uniqueness is enforced: only one active contract per
+  tenant_id + api_connection_id + method + endpoint_path.
 ```
 
 ---
@@ -1950,6 +2009,9 @@ schema mismatch encountered
 ```text
 request_id
 user_id
+tenant_id
+api_connection_id
+published_contract_id
 resource
 endpoint
 contract_version
@@ -1965,9 +2027,11 @@ duration_ms
 timestamp
 ```
 
+These fields are required to trace any request to the exact tenant, Oracle connection, contract version, and object that was accessed. See section 38.9 for the rationale.
+
 ## 28.4 Logging Rule
 
-Do not log sensitive bind values by default.
+Do not log credentials, session tokens, sensitive bind values, or PII by default.
 
 ---
 
@@ -2234,7 +2298,7 @@ Publish immutable resolved contracts.
 ```text
 [ ] Draft config is never used directly by runtime
 [ ] Publish creates immutable version
-[ ] Active contract is resolvable by endpoint
+[ ] Active contract is resolvable by scoped key: tenantId + apiConnectionId + method + endpoint
 [ ] Previous versions are traceable
 [ ] Publish diagnostics are available
 ```
@@ -2251,7 +2315,7 @@ Load published contracts into memory for fast routing and execution.
 
 ```text
 [ ] Load active contracts on startup
-[ ] Build endpoint-to-contract map
+[ ] Build scoped contract map keyed by tenantId + apiConnectionId + method + endpointPath
 [ ] Validate contract schema version at load time
 [ ] Add manual cache reload endpoint
 [ ] Add cache refresh on publish, if feasible
@@ -2631,54 +2695,74 @@ Build UI for managing Oracle-backed API contracts.
 
 # 31. Updated MVP Scope
 
-## MVP Must Include
+## Single-Database Read-Only MVP — Verified (2026-06-04)
+
+The following features were built and confirmed end-to-end through the smoke test against PSSBSA / Oracle 11g / PSSBSA.RPT_CURRENCYMAS:
 
 ```text
-Postgres operational metadata DB
-JSONB published contract storage
-Oracle connector
-Oracle version detection
-Oracle owner/schema support
-Oracle schema inspector
-Tables/views/columns/constraints/sequences metadata
-Packages/procedures/arguments metadata
-Draft contract storage
-Oracle-aware contract compiler
-Resolved contract meta-schema validation
-Publish workflow
-Runtime contract cache
-Table/view-backed read/list APIs
-Oracle bind-variable query builder
-Oracle pagination:
-  - OFFSET/FETCH for newer Oracle
-  - ROWNUM for Oracle 11g
-Oracle error translation
-Oracle type normalization:
-  - CHAR trimRight
-  - fake boolean mapping
-  - DATE/TIMESTAMP normalization
-Basic validations
-Safe filters
-Safe sorting
-Field mapping
-Read/write field control
-Basic audit logging
-Controlled schema mismatch handling
+✓ Postgres operational metadata DB
+✓ JSONB published contract storage
+✓ Oracle connector (thick mode, Oracle 11g)
+✓ Oracle version detection
+✓ Oracle owner/schema support
+✓ Oracle schema inspector (tables, views, columns, constraints, sequences,
+    packages, procedures, arguments)
+✓ Draft contract storage and retrieval
+✓ Oracle-aware contract compiler
+✓ Resolved contract meta-schema validation
+✓ Publish workflow (draft → validate → compile → publish → retire)
+✓ Runtime contract cache (load, reload, evict on retire)
+✓ Table/view-backed read/list APIs (GET list, GET by id)
+✓ Oracle bind-variable query builder
+✓ Oracle pagination — ROWNUM for Oracle 11g
+✓ Oracle error translation (ORA-00942, ORA-01403, ORA-00001, etc.)
+✓ Oracle type normalization — CHAR trimRight, booleanMapping, DATE ISO
+✓ Boolean filter transformer (filter[isActive]=true → ACTIVE = 'Y')
+✓ Safe filters, safe sorting, field mapping
+✓ Read/write field control (writeOnly, readOnly)
+✓ Basic audit logging
+✓ Controlled schema mismatch handling (CONTRACT_SCHEMA_MISMATCH)
+✓ On-demand schema drift check (healthy status confirmed)
+✓ Package/procedure-backed writes (write handler built and tested)
+✓ SYS_REFCURSOR-backed reads (cursor handler built and tested)
+✓ Optional direct table writes (direct write handler built and tested)
 ```
 
-## MVP+ Should Include
+Note: tenant scoping is not yet implemented. The current runtime uses a
+stub permissive checker and a single Oracle connection. See below.
+
+## Required Before Multi-Database Testing
+
+Authentication and tenant scoping must be in place before connecting a second Oracle backend. See section 38 for the full design.
 
 ```text
-Package/procedure-backed writes
-SYS_REFCURSOR-backed reads
-Procedure OUT param mapping
-Trigger-generated ID support
-Sequence-generated ID support
+Blocked until Phases 9a–9f are complete:
+  - bridge_tenants, bridge_tenant_connections tables exist
+  - published_contracts carries tenant_id and api_connection_id
+  - Runtime cache is keyed by tenantId + apiConnectionId + method + path
+  - Runtime authenticates and resolves tenant before contract lookup
+  - Tests prove cross-tenant isolation (tenant A and tenant B
+    cannot access each other's contracts)
+```
+
+## Required Before Write Testing Against Real Oracle
+
+```text
+Blocked until:
+  - Auth/tenant boundary is defined and in place (Phases 9a–9e)
+  - A safe disposable Oracle schema is available for write tests
+    (do not run write tests against PSSBSA business data)
+  - Audit logs capture userId and tenantId on every write event (Phase 9f)
+```
+
+## MVP+ (Next After Auth/Tenant)
+
+```text
 Optimistic locking
-On-demand schema drift check
+Advanced row-level permissions
 ```
 
-## Phase 2 Should Include
+## Phase 2
 
 ```text
 Scheduled schema drift detection
@@ -2686,12 +2770,11 @@ Synonym-aware object resolution
 Procedure signature drift detection
 Invalid package/view detection
 Safe includes/JOINs
-Advanced row-level permissions
 Contract rollback
 Admin UI polish
 ```
 
-## Phase 3 Should Include
+## Phase 3
 
 ```text
 Multi-schema resources
@@ -2708,24 +2791,35 @@ Advanced observability
 
 # 32. Phase Summary Table
 
+Status reflects implementation as of 2026-06-04.
+Phases 0–15 were verified by the single-database read-only smoke test
+against PSSBSA / Oracle 11g. Phases 9a–9g are not yet started.
+
 | Phase | Name                                     | Priority | Status      |
 | ----- | ---------------------------------------- | -------: | ----------- |
-| 0     | Oracle Foundation & Design Lock          |      MVP | Not Started |
-| 1     | Postgres Operational Metadata Store      |      MVP | Not Started |
-| 2     | Oracle Connector & Schema Inspector      |      MVP | Not Started |
-| 3     | Oracle-aware Draft Contract Designer     |      MVP | Not Started |
-| 4     | Oracle-aware Contract Compiler           |      MVP | Not Started |
-| 5     | Publish Workflow & Versioning            |      MVP | Not Started |
-| 6     | Runtime Contract Cache                   |      MVP | Not Started |
-| 7     | Runtime Oracle Read/List APIs            |      MVP | Not Started |
-| 8     | Oracle Type Normalization & Transformers |      MVP | Not Started |
-| 9     | Oracle Error Translation                 |      MVP | Not Started |
-| 10    | Procedure/Package-backed Writes          |     MVP+ | Not Started |
-| 11    | `SYS_REFCURSOR` Procedure Reads          |     MVP+ | Not Started |
-| 12    | Optional Direct Table Writes             |     MVP+ | Not Started |
+| 0     | Oracle Foundation & Design Lock          |      MVP | Done        |
+| 1     | Postgres Operational Metadata Store      |      MVP | Done        |
+| 2     | Oracle Connector & Schema Inspector      |      MVP | Done        |
+| 3     | Oracle-aware Draft Contract Designer     |      MVP | Done        |
+| 4     | Oracle-aware Contract Compiler           |      MVP | Done        |
+| 5     | Publish Workflow & Versioning            |      MVP | Done        |
+| 6     | Runtime Contract Cache                   |      MVP | Done        |
+| 7     | Runtime Oracle Read/List APIs            |      MVP | Done        |
+| 8     | Oracle Type Normalization & Transformers |      MVP | Done        |
+| 9     | Oracle Error Translation                 |      MVP | Done        |
+| 9a    | Authentication Foundation                | Required | Not Started |
+| 9b    | Tenant Metadata Store                    | Required | Not Started |
+| 9c    | Tenant-aware Contract Publishing         | Required | Not Started |
+| 9d    | Scoped Runtime Cache                     | Required | Not Started |
+| 9e    | Runtime Tenant Resolution                | Required | Not Started |
+| 9f    | Tenant-aware Audit Logs                  | Required | Not Started |
+| 9g    | Admin UI Tenant Selector                 |  Phase 2 | Not Started |
+| 10    | Procedure/Package-backed Writes          |     MVP+ | Done        |
+| 11    | `SYS_REFCURSOR` Procedure Reads          |     MVP+ | Done        |
+| 12    | Optional Direct Table Writes             |     MVP+ | Done        |
 | 13    | Optimistic Locking                       |     MVP+ | Not Started |
-| 14    | Audit & Observability                    |      MVP | Not Started |
-| 15    | Oracle Schema Drift Handling             |  Phase 2 | Not Started |
+| 14    | Audit & Observability                    |      MVP | Done        |
+| 15    | Oracle Schema Drift Handling             |  Phase 2 | Done        |
 | 16    | Safe Includes / Relational Data          |  Phase 2 | Not Started |
 | 17    | Admin UI / Management Console            | Phase 2+ | Not Started |
 
@@ -2782,23 +2876,31 @@ Then add direct table writes only where explicitly approved.
 
 # 34. Key Risks and Mitigations
 
-| Risk                                    | Why It Matters                   | Mitigation                      |
-| --------------------------------------- | -------------------------------- | ------------------------------- |
-| Direct table writes bypass PL/SQL logic | Can corrupt legacy workflows     | Prefer package/procedure writes |
-| Oracle object owner ambiguity           | Wrong object may be used         | Store owner/schema explicitly   |
-| Sequence/trigger ID handling missing    | Inserts may fail or return no ID | Add explicit ID strategy        |
-| Raw ORA errors exposed                  | Leaks internal DB details        | Oracle error translator         |
-| Invalid package/view                    | Runtime failure                  | Check `ALL_OBJECTS.STATUS`      |
-| Procedure signature drift               | API calls break                  | Inspect `ALL_ARGUMENTS`         |
-| `SYS_REFCURSOR` unsupported             | Procedure reads fail             | Add cursor mapping              |
-| Fake boolean leakage                    | Bad API shape                    | Add boolean transformer         |
-| `CHAR` trailing spaces                  | Frontend matching bugs           | Trim `CHAR` values              |
-| Oracle 11g pagination unsupported       | List APIs fail                   | Use ROWNUM strategy             |
-| Contract DB bottleneck                  | Runtime latency                  | In-memory contract cache        |
-| Schema drift                            | Runtime breakage                 | Drift detection                 |
-| N+1 includes                            | Performance failure              | Compile JOIN plans              |
-| Sensitive field leakage                 | Security issue                   | Field-level permissions         |
-| Malformed contracts                     | Runtime instability              | Meta-schema validation          |
+| Risk                                     | Why It Matters                   | Mitigation                      |
+| ---------------------------------------- | -------------------------------- | ------------------------------- |
+| Direct table writes bypass PL/SQL logic  | Can corrupt legacy workflows     | Prefer package/procedure writes |
+| Oracle object owner ambiguity            | Wrong object may be used         | Store owner/schema explicitly   |
+| Sequence/trigger ID handling missing     | Inserts may fail or return no ID | Add explicit ID strategy        |
+| Raw ORA errors exposed                   | Leaks internal DB details        | Oracle error translator         |
+| Invalid package/view                     | Runtime failure                  | Check `ALL_OBJECTS.STATUS`      |
+| Procedure signature drift                | API calls break                  | Inspect `ALL_ARGUMENTS`         |
+| `SYS_REFCURSOR` unsupported              | Procedure reads fail             | Add cursor mapping              |
+| Fake boolean leakage                     | Bad API shape                    | Add boolean transformer         |
+| `CHAR` trailing spaces                   | Frontend matching bugs           | Trim `CHAR` values              |
+| Oracle 11g pagination unsupported        | List APIs fail                   | Use ROWNUM strategy             |
+| Contract DB bottleneck                   | Runtime latency                  | In-memory contract cache        |
+| Schema drift                             | Runtime breakage                 | Drift detection                 |
+| N+1 includes                             | Performance failure              | Compile JOIN plans              |
+| Sensitive field leakage                  | Security issue                   | Field-level permissions         |
+| Malformed contracts                      | Runtime instability              | Meta-schema validation          |
+| Cross-tenant data leakage                | User sees another tenant's data  | Scope by tenant + connection    |
+| Endpoint path collision across databases | Same path maps to multiple DBs   | Use tenant+connection cache key |
+| Tenant header spoofing                   | Caller fakes tenant header       | Verify user's tenant membership |
+| Wrong-database contract publication      | Contract targets wrong database  | Validate connection owns tenant |
+| Missing audit tenant identity            | Incident untraceable by tenant   | Log tenantId + connectionId     |
+| Direct apiConnectionId header exposure   | Client guesses connection UUID   | Use alias, not raw ID in public |
+| Unauthenticated runtime access           | Unauthed caller reaches Oracle   | Auth before contract resolution |
+| Tenant default connection not set        | Runtime cannot resolve DB        | Set a default in tenant config  |
 
 ---
 
@@ -2890,3 +2992,592 @@ First determine whether the safe access path is:
 ```
 
 That distinction is what makes the solution safe for a real Oracle legacy database rather than just a dynamic CRUD generator.
+
+---
+
+# 38. Authentication, Tenant Scoping, and Multi-Database Routing
+
+The single-database read-only smoke test passed end-to-end against `PSSBSA.RPT_CURRENCYMAS`. Before adding a second Oracle backend, the runtime design must be extended to define how authentication and tenant/connection scoping work. This section covers those requirements.
+
+---
+
+## 38.1 Why This Is Needed
+
+The current runtime resolves contracts by HTTP method and endpoint path alone. That is sufficient for a single-database MVP but breaks immediately when a second Oracle backend is introduced.
+
+**The collision problem:**
+
+```text
+DB1 (PSSBSA): publishes  GET /currencies  →  PSSBSA.RPT_CURRENCYMAS
+DB2 (FINDB):  publishes  GET /currencies  →  FINDB.FIN_CURRENCY
+```
+
+With path-only resolution the runtime cannot distinguish which backend to use. A caller who knows the endpoint path can reach any database that exposes it, with no access control.
+
+**The rule:**
+
+> A runtime caller must never be able to access a contract only by knowing its endpoint path. Runtime resolution must be scoped by authenticated tenant/connection context.
+
+This means:
+
+```text
+Authentication must happen before contract resolution.
+Tenant identity must come from a trusted source, not a client-supplied header.
+The runtime cache key must include tenantId and apiConnectionId.
+Contract resolution is always scoped — never global.
+```
+
+---
+
+## 38.2 Authentication Model
+
+### Runtime APIs (`/api/*`)
+
+All runtime APIs require an authenticated user identity. In the MVP-auth phase this may be provided by a stub principal provider or a trusted internal header. In production it must be a verified JWT, OIDC token, or session token.
+
+### Admin APIs (`/bridge/*`)
+
+Admin APIs continue to require `x-admin-api-key`. This is acceptable for local development and internal MVP admin tooling. Production deployments should replace or supplement this with a scoped service account or internal OIDC.
+
+### Authenticated Principal Shape
+
+The runtime must build a principal after successful authentication:
+
+```json
+{
+  "userId": "u_123",
+  "username": "ajay",
+  "roles": ["bridge.consumer"],
+  "tenantIds": ["tenant_pssbsa"],
+  "permissions": ["currencies.read"]
+}
+```
+
+Permission checks against a contract's `operation.permission` field happen **after** tenant and connection are resolved. A user must first be verified as belonging to the requested tenant before their operation-level permissions are evaluated.
+
+### Admin Actions
+
+Admin actions (publish, retire, drift check) must also carry tenant context. Publishing a contract to the wrong tenant is a configuration error and must be caught at publish time, not at runtime.
+
+---
+
+## 38.3 Tenant Model
+
+A **tenant** represents a business, client, or company scope. Tenants are the unit of isolation. A user belongs to one or more tenants. Every published contract belongs to exactly one tenant + connection pair.
+
+**Important distinctions:**
+
+```text
+Tenant is not necessarily the same as Oracle schema or owner.
+One tenant can map to one or more Oracle api_connections.
+One api_connection should generally serve one tenant only.
+One api_connection may serve multiple tenants only if explicitly
+configured and each contract is individually scoped.
+```
+
+### New Operational Metadata Tables
+
+These tables should be added to the Postgres operational DB alongside the existing `api_connections`, `published_contracts`, and related tables.
+
+```text
+bridge_tenants
+  id                UUID PRIMARY KEY
+  code              VARCHAR(100) UNIQUE NOT NULL
+  name              VARCHAR(255) NOT NULL
+  status            VARCHAR(30) NOT NULL   — active / suspended / archived
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+
+bridge_tenant_connections
+  id                UUID PRIMARY KEY
+  tenant_id         UUID NOT NULL  (FK → bridge_tenants)
+  api_connection_id UUID NOT NULL  (FK → api_connections)
+  is_default        BOOLEAN NOT NULL DEFAULT false
+  status            VARCHAR(30) NOT NULL
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+
+bridge_user_tenant_access
+  id                UUID PRIMARY KEY
+  user_id           VARCHAR(100) NOT NULL
+  tenant_id         UUID NOT NULL  (FK → bridge_tenants)
+  role              VARCHAR(100) NOT NULL
+  status            VARCHAR(30) NOT NULL
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+```
+
+Optional — if permission management is not delegated to an external identity system:
+
+```text
+bridge_roles
+bridge_permissions
+bridge_role_permissions
+bridge_user_roles
+```
+
+---
+
+## 38.4 Published Contract Scoping
+
+### Current Global Uniqueness — Insufficient for Multi-Database
+
+The current `published_contracts` table enforces:
+
+```sql
+UNIQUE (resource_name, version)
+UNIQUE (endpoint_path, version)
+```
+
+This breaks when two tenants both publish `/currencies`. That is a valid and expected scenario.
+
+### New Scoped Uniqueness Constraint
+
+Replace the global endpoint uniqueness with:
+
+```sql
+UNIQUE (tenant_id, api_connection_id, endpoint_path, version)
+```
+
+### Active Contract Uniqueness Rule
+
+Only one active contract may exist per:
+
+```text
+tenant_id + api_connection_id + HTTP method + endpoint_path
+```
+
+This means:
+
+```text
+Two tenants can both have an active GET /currencies without collision.
+
+One tenant publishing GET /currencies from two different connections
+is allowed only if explicitly disambiguated (e.g. different endpoint
+paths, or explicit connection routing per request).
+
+Retire and deprecate actions must also be scoped to tenant + connection.
+```
+
+### Required Publish Inputs
+
+Contract publish must include:
+
+```text
+tenantId
+apiConnectionId
+source owner / object
+endpoint path
+operation permissions
+```
+
+### Publish Validation Rules
+
+The admin publish flow must verify:
+
+```text
+1. Tenant exists and is active.
+2. apiConnectionId belongs to the tenant in bridge_tenant_connections.
+3. No active contract exists for:
+   tenant_id + api_connection_id + method + endpoint_path.
+4. Source object exists in the selected connection's latest snapshot.
+5. Admin has permission to publish for that tenant.
+```
+
+---
+
+## 38.5 Runtime Cache Key
+
+### Current Design
+
+```text
+Cache key = method + endpointPath
+```
+
+### New Design
+
+```text
+Cache key = tenantId + apiConnectionId + method + endpointPath
+```
+
+Example:
+
+```text
+tenant_pssbsa:959870a7:GET:/currencies
+```
+
+### Default Connection Resolution
+
+If a tenant has exactly one active default connection, the runtime resolves the `apiConnectionId` internally from the authenticated tenant identity. The caller does not need to specify a connection explicitly.
+
+Resolution path for a request with no explicit connection:
+
+```text
+Authenticated token → userId → tenantId → default apiConnectionId → cache lookup
+```
+
+If a tenant has no default connection configured, the runtime must return a clear error, not a generic 404.
+
+---
+
+## 38.6 Runtime Request Resolution Lifecycle
+
+The existing lifecycle in section 22 must be extended to include authentication and tenant verification before contract resolution.
+
+### Updated Read/List Lifecycle
+
+```text
+1.  Receive request.
+2.  Authenticate user.
+3.  Build Principal (userId, roles, tenantIds, permissions).
+4.  Resolve tenant:
+      - from verified JWT claim, or
+      - from X-Bridge-Tenant-Id header (internal mode only).
+5.  Verify user has access to resolved tenant
+    (bridge_user_tenant_access lookup).
+6.  Resolve apiConnectionId for tenant:
+      - default connection, or
+      - connection alias from X-Connection-Alias header if authorized.
+7.  Resolve active published contract from cache:
+      key = tenantId + apiConnectionId + method + endpointPath.
+8.  Check operation permission against Principal.
+9.  Apply field permissions.
+10. Apply row/scope permissions.
+11. Execute Oracle operation using bind variables.
+12. Audit: userId, tenantId, apiConnectionId, endpoint,
+            operation, contractVersion, publishedContractId.
+13. Return response.
+```
+
+**Steps 1–6 run before the cache is ever consulted.** An unauthenticated caller, a caller with no tenant access, or a caller with no authorized connection never reaches step 7.
+
+---
+
+## 38.7 Request Examples
+
+### Internal / Development Only
+
+```http
+GET /api/currencies
+X-Bridge-Tenant-Id: tenant_pssbsa
+X-Bridge-Connection-Id: 959870a7-9d9c-4bd8-8be3-b4ca09320231
+```
+
+`X-Bridge-Connection-Id` is only trusted in internal mode. It must not be accepted from public clients in production.
+
+### Preferred Tenant-Scoped Runtime (Production)
+
+```http
+GET /api/currencies
+Authorization: Bearer <jwt>
+X-Tenant-Id: tenant_pssbsa
+```
+
+The JWT provides `userId`. Tenant membership is verified from `bridge_user_tenant_access`. The tenant's default connection is resolved internally.
+
+### Tenant with Multiple Connections
+
+```http
+GET /api/currencies
+Authorization: Bearer <jwt>
+X-Tenant-Id: tenant_pssbsa
+X-Connection-Alias: legacy-erp
+```
+
+`X-Connection-Alias` is resolved to an `api_connection_id` from `bridge_tenant_connections`. The alias is admin-configured and human-readable — not a raw UUID. The user must be authorized for both the tenant and the alias.
+
+### Header Trust Rules
+
+```text
+Direct apiConnectionId in a header is dangerous in production.
+Production must use: tenant default connection, or tenant + alias.
+User must be verified for the tenant before the tenant header is trusted.
+Raw apiConnectionId headers must only be accepted in internal mode.
+```
+
+---
+
+## 38.8 Admin Flow Changes
+
+Contract creation and publish must include tenant context. The admin publish API must:
+
+```text
+1. Require tenantId in the publish request body.
+2. Require apiConnectionId in the publish request body.
+3. Validate tenant exists and is active.
+4. Validate apiConnectionId belongs to the tenant.
+5. Validate no collision on:
+   tenant_id + api_connection_id + method + endpoint_path (active).
+6. Validate source object exists in the connection's current snapshot.
+7. Validate the submitting admin has publish permission for the tenant.
+```
+
+Publishing without `tenantId` must be rejected. Publishing to a connection that does not belong to the declared tenant must be rejected.
+
+---
+
+## 38.9 Audit Log Changes
+
+The existing audit fields defined in section 28.3 must be extended.
+
+### Updated Audit Fields
+
+```text
+request_id
+user_id
+tenant_id              ← new
+api_connection_id      ← new
+resource
+endpoint
+contract_version
+published_contract_id  ← new
+operation
+oracle_owner
+oracle_object_name
+oracle_object_type
+oracle_package_name
+oracle_procedure_name
+oracle_error_code
+status
+duration_ms
+timestamp
+```
+
+These fields are required to investigate cross-tenant or wrong-database access. A security review must be traceable from a single audit log entry to the exact tenant, connection, contract version, and Oracle object that was accessed.
+
+**Logging rule:** Never log credentials, session tokens, raw Oracle bind values, or PII in audit fields.
+
+---
+
+## 38.10 Security Rules
+
+```text
+1.  Endpoint path alone is never sufficient for runtime contract access.
+
+2.  A user cannot switch tenant or database by changing a header unless
+    they are explicitly authorized for that tenant and connection.
+
+3.  apiConnectionId must not be directly trusted from public clients.
+
+4.  Runtime must reject requests with missing tenant context unless a
+    safe default tenant is explicitly configured for that runtime instance.
+
+5.  Contract resolution must happen after authentication and tenant
+    verification are complete.
+
+6.  Field-level and row-level permissions are evaluated after tenant
+    scope is resolved.
+
+7.  Admin actions (publish, retire, drift check) must be tenant-scoped.
+
+8.  Drift checks and retire actions must verify that the admin has access
+    to the contract's tenant/connection pair.
+
+9.  Logs must never include credentials or sensitive bind values.
+
+10. The compiler must validate that a published contract's
+    apiConnectionId belongs to the declared tenantId.
+```
+
+---
+
+## 38.11 MVP Authentication and Tenant Phase
+
+### MVP-Auth Phase — Required Before Second Database
+
+```text
+[ ] Keep ADMIN_API_KEY for admin endpoints (acceptable for now)
+[ ] Add bridge_tenants table and Prisma model
+[ ] Add bridge_tenant_connections table
+[ ] Add bridge_user_tenant_access table, or use a stubbed principal provider
+[ ] Add tenantId and apiConnectionId columns to published_contracts
+[ ] Update UNIQUE constraint:
+      tenant_id + api_connection_id + endpoint_path + version
+[ ] Update cache key:
+      tenantId + apiConnectionId + method + endpointPath
+[ ] Add X-Bridge-Tenant-Id header resolution for internal testing
+[ ] Optionally allow X-Bridge-Connection-Id in internal mode only
+[ ] Add tests: GET /currencies for tenant A and tenant B do not collide
+[ ] Add tests: unauthenticated request is rejected before contract lookup
+```
+
+### Production-Auth Phase — After MVP-Auth
+
+```text
+[ ] Integrate JWT / OIDC / session authentication
+[ ] Build user-to-tenant access verification against bridge_user_tenant_access
+[ ] Remove or restrict X-Bridge-Connection-Id for public clients
+[ ] Add permission provider backed by bridge_role_permissions
+[ ] Add tenant-aware admin UI
+[ ] Enforce per-tenant admin authorization
+[ ] Add connection alias resolution for multi-connection tenants
+```
+
+---
+
+## 38.12 Phase Plan Additions
+
+The following phases should be inserted into the phase plan after Phase 9 — Oracle Error Translation. They are prerequisites for multi-database testing.
+
+### Phase 9a — Authentication Foundation
+
+**Goal:** Define the authentication boundary and principal model.
+
+```text
+[ ] Define Principal type and provider interface
+[ ] Add auth middleware skeleton to runtime router
+[ ] Implement stub principal provider for internal testing
+[ ] Add unit tests: unauthenticated requests are rejected before cache lookup
+[ ] Add unit tests: principal is built from verified credentials
+```
+
+### Phase 9b — Tenant Metadata Store
+
+**Goal:** Persist tenant, connection, and user-access metadata.
+
+```text
+[ ] Add bridge_tenants table and Prisma model
+[ ] Add bridge_tenant_connections table
+[ ] Add bridge_user_tenant_access table
+[ ] Add admin APIs: create tenant, assign connection, assign user
+[ ] Tests for tenant CRUD and connection assignment
+[ ] Tests proving one connection can only be assigned to its declared tenant
+```
+
+### Phase 9c — Tenant-aware Contract Publishing
+
+**Goal:** Scope every published contract to a tenant + connection pair.
+
+```text
+[ ] Add tenantId and apiConnectionId to published_contracts schema
+[ ] Update migration to add columns with NOT NULL enforcement
+[ ] Update compiler to require and validate tenantId + apiConnectionId
+[ ] Update UNIQUE constraint to scoped form
+[ ] Update publish admin API to require and validate tenant context
+[ ] Tests for scoped uniqueness enforcement
+[ ] Tests: publishing to a mismatched tenant/connection is rejected
+```
+
+### Phase 9d — Scoped Runtime Cache
+
+**Goal:** Replace global endpoint cache with tenant-scoped cache.
+
+```text
+[ ] Update cache key: tenantId + apiConnectionId + method + endpointPath
+[ ] Update contract loader to include tenantId and apiConnectionId
+[ ] Update getContractByEndpoint to accept and require tenant + connection context
+[ ] Tests: tenant A and tenant B /currencies resolve to different contracts
+[ ] Tests: cache miss is clean, not a fallback to another tenant's contract
+```
+
+### Phase 9e — Runtime Tenant Resolution
+
+**Goal:** Wire authentication and tenant resolution into the request lifecycle.
+
+```text
+[ ] Add tenant resolution step to runtime dispatcher
+[ ] Verify user has access to resolved tenant (bridge_user_tenant_access)
+[ ] Resolve apiConnectionId from tenant's default connection
+[ ] Support X-Bridge-Tenant-Id header in internal mode
+[ ] Tests: cross-tenant access attempt returns 403, not 404
+[ ] Tests: missing tenant context returns clear error
+```
+
+### Phase 9f — Tenant-aware Audit Logs
+
+**Goal:** Include tenant and connection identity in every audit entry.
+
+```text
+[ ] Add tenantId to runtime audit log entries
+[ ] Add apiConnectionId to runtime audit log entries
+[ ] Add publishedContractId to runtime audit log entries
+[ ] Tests: audit entries include correct tenant/connection/contract identity
+[ ] Tests: write events log userId and tenantId
+```
+
+### Phase 9g — Admin UI Tenant Selector
+
+**Goal:** Add tenant context to admin tooling and review screens.
+
+```text
+[ ] Add tenant selector to contract publish review screen
+[ ] Show tenant/connection scope on published contract list
+[ ] Show tenant context on drift check results
+[ ] Restrict admin contract actions to authorized tenant scope
+```
+
+---
+
+## 38.13 Updated Risks and Mitigations
+
+The following risks should be added to section 34 (Key Risks and Mitigations):
+
+| Risk                                     | Why It Matters                   | Mitigation                      |
+| ---------------------------------------- | -------------------------------- | ------------------------------- |
+| Cross-tenant data leakage                | User sees another tenant's data  | Scope by tenant + connection    |
+| Endpoint path collision across databases | Same path maps to multiple DBs   | Use tenant+connection cache key |
+| Tenant header spoofing                   | Caller fakes tenant header       | Verify user's tenant membership |
+| Wrong-database contract publication      | Contract targets wrong database  | Validate connection owns tenant |
+| Missing audit tenant identity            | Incident untraceable by tenant   | Log tenantId + connectionId     |
+| Direct apiConnectionId header exposure   | Client guesses connection UUID   | Use alias, not raw ID in public |
+| Unauthenticated runtime access           | Unauthed caller reaches Oracle   | Auth before contract resolution |
+| Tenant default connection not set        | Runtime cannot resolve DB        | Set a default in tenant config  |
+
+---
+
+## 38.14 Updated MVP Scope
+
+### Single-database read-only MVP — Verified
+
+```text
+The single-database read-only smoke test passed end-to-end
+against PSSBSA / Oracle 11g / PSSBSA.RPT_CURRENCYMAS:
+
+  ✓ Oracle schema inspection and snapshot
+  ✓ Contract draft, compile, publish
+  ✓ Runtime GET list, GET by id
+  ✓ Filters, sorting, ROWNUM pagination
+  ✓ Boolean filter transformer bug fixed and verified live
+  ✓ Drift check — healthy, zero findings
+  ✓ Contract retire — idempotent, cache evicted immediately
+  ✓ 274 tests passing, typecheck clean
+```
+
+### Multi-database testing — Blocked Until
+
+Multi-database testing must not begin until the following MVP-auth gates are cleared:
+
+```text
+[ ] bridge_tenants, bridge_tenant_connections tables exist
+[ ] published_contracts carry tenantId and apiConnectionId
+[ ] Cache key is tenant-scoped
+[ ] Runtime resolves tenant before resolving contract
+[ ] Tests prove tenant A and tenant B /currencies are isolated
+[ ] Tests prove unauthenticated requests never reach contract cache
+```
+
+### Write testing — Blocked Until
+
+Write testing (POST/PUT/PATCH against real Oracle) must not begin until:
+
+```text
+[ ] Auth/tenant boundary is defined and in place
+[ ] A safe disposable Oracle schema is available for write tests
+  (do not run write tests against PSSBSA business data)
+[ ] Write operations are gated by authenticated identity and tenant scope
+[ ] Audit logs capture userId and tenantId on every write event
+```
+
+### MVP+ Additions — Required Before Production
+
+Authentication and tenant scoping is the highest-priority addition before any production-facing deployment:
+
+```text
+Phase 9a — Authentication Foundation
+Phase 9b — Tenant Metadata Store
+Phase 9c — Tenant-aware Contract Publishing
+Phase 9d — Scoped Runtime Cache
+Phase 9e — Runtime Tenant Resolution
+Phase 9f — Tenant-aware Audit Logs
+Phase 9g — Admin UI Tenant Selector
+```

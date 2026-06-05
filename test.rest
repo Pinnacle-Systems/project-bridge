@@ -331,10 +331,16 @@ Content-Type: application/json
 ###############################################################################
 # 5. PUBLISH
 ###############################################################################
+# Phase 9c: publish now requires tenantId and apiConnectionId.
+# Both must be UUIDs that exist in the bridge metadata tables.
+# tenantId  — from POST /bridge/tenants (section 13)
+# apiConnectionId — from POST /bridge/connections (section 1)
+# The tenant-connection assignment (section 13) must exist before publishing.
 
 # @name Publish Draft
 # Recompiles the stored draft, persists the resolved contract, and deprecates any
-# prior active version for the same resource+endpoint.
+# prior active version for the SAME tenant + connection + endpoint scope.
+# A second tenant publishing the same endpoint path creates an independent contract.
 # Expect: 201 with { data: { id, resourceName, version, endpointPath, status: "active" } }
 POST {{baseUrl}}/bridge/contracts/drafts/{{draftId}}/publish
 x-admin-api-key: {{adminApiKey}}
@@ -342,6 +348,8 @@ Content-Type: application/json
 
 {
   "publishedBy": "your-name",
+  "tenantId": "{{tenantId}}",
+  "apiConnectionId": "{{connectionId}}",
   "changeReason": "Initial publish"
 }
 
@@ -517,7 +525,86 @@ GET {{baseUrl}}/bridge/diagnostics/audit?type=runtime.oracle.error&take=20
 x-admin-api-key: {{adminApiKey}}
 
 ###############################################################################
-# 13. RETIRE
+# 13. TENANTS (Phase 9a/9b/9c — Auth Foundation + Tenant Metadata + Scoped Publishing)
+###############################################################################
+# Phase 9c: published contracts are now scoped to a tenant + connection pair.
+# Create a tenant and assign a connection BEFORE publishing drafts (section 5).
+#
+# Runtime cache key is still method + endpointPath (Phase 9d will scope it).
+# Multi-database runtime testing is still blocked until Phase 9d–9e are complete.
+
+# @name Create Tenant
+# Creates a tenant record. code must be unique.
+POST {{baseUrl}}/bridge/tenants
+x-admin-api-key: {{adminApiKey}}
+Content-Type: application/json
+
+{
+  "code": "tenant_pssbsa",
+  "name": "PSSBSA"
+}
+
+###
+
+# Copy the id from the response above.
+@tenantId = 00000000-0000-0000-0000-000000000000
+
+###
+
+# @name List Tenants
+GET {{baseUrl}}/bridge/tenants
+x-admin-api-key: {{adminApiKey}}
+
+###
+
+# @name Get Tenant
+GET {{baseUrl}}/bridge/tenants/{{tenantId}}
+x-admin-api-key: {{adminApiKey}}
+
+###
+
+# @name Assign Oracle Connection to Tenant
+# Links an existing api_connection to this tenant.
+# Set isDefault: true to make it the default connection for the tenant.
+# Phase 9d will use this to resolve the runtime Oracle connection from tenant identity.
+POST {{baseUrl}}/bridge/tenants/{{tenantId}}/connections
+x-admin-api-key: {{adminApiKey}}
+Content-Type: application/json
+
+{
+  "apiConnectionId": "{{connectionId}}",
+  "alias": "legacy-erp",
+  "isDefault": true
+}
+
+###
+
+# @name List Tenant Connections
+GET {{baseUrl}}/bridge/tenants/{{tenantId}}/connections
+x-admin-api-key: {{adminApiKey}}
+
+###
+
+# @name Assign User to Tenant
+# Grants a user access to this tenant with the given role.
+# Phase 9e will check this table before allowing contract resolution.
+POST {{baseUrl}}/bridge/tenants/{{tenantId}}/users
+x-admin-api-key: {{adminApiKey}}
+Content-Type: application/json
+
+{
+  "userId": "ajaykk",
+  "role": "bridge.admin"
+}
+
+###
+
+# @name List Tenant Users
+GET {{baseUrl}}/bridge/tenants/{{tenantId}}/users
+x-admin-api-key: {{adminApiKey}}
+
+###############################################################################
+# 14. RETIRE
 ###############################################################################
 
 # @name Retire Published Contract

@@ -177,6 +177,7 @@ export type DraftApiContract = {
 export const SCHEMA_VERSION = "1" as const;
 
 export type RuntimeContractMetadata = {
+  tenantId?: string;         // Phase 9c: set on all newly compiled contracts
   apiConnectionId?: string;
   loadedAt?: Date;
   cacheKey: string;

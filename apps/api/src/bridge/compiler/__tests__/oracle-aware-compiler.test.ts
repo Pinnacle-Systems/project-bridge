@@ -253,6 +253,46 @@ function createStore(snapshot = schemaSnapshot()): ContractCompilerStore {
         return { snapshotData: snapshot };
       }
     }
+    // No bridgeTenant — tenant validation is skipped for these tests
+  };
+}
+
+// Tenant-aware store: enforces tenant validation
+function createTenantAwareStore(
+  snapshot = schemaSnapshot(),
+  opts: {
+    tenantStatus?: string;
+    connectionAssigned?: boolean;
+    connectionStatus?: string;
+  } = {}
+): ContractCompilerStore {
+  const { tenantStatus = "active", connectionAssigned = true, connectionStatus = "active" } = opts;
+  return {
+    apiConnection: {
+      async findUnique() {
+        return { id: "connection-1", paginationStrategy: "offsetFetch" };
+      }
+    },
+    oracleSchemaSnapshot: {
+      async findFirst() {
+        return { snapshotData: snapshot };
+      }
+    },
+    bridgeTenant: {
+      async findUnique({ where }) {
+        if (where.id === "tenant-1") return { id: "tenant-1", status: tenantStatus };
+        return null;
+      }
+    },
+    bridgeTenantConnection: {
+      async findFirst({ where }) {
+        if (!connectionAssigned) return null;
+        if (where.tenantId === "tenant-1" && where.apiConnectionId === "connection-1") {
+          return { id: "tc-1", status: connectionStatus };
+        }
+        return null;
+      }
+    }
   };
 }
 
@@ -733,6 +773,138 @@ describe("Oracle-aware contract compiler", () => {
     expect(result.diagnostics).toEqual(
       expect.arrayContaining([expect.objectContaining({ code: "SYS_REFCURSOR_WRITE_UNSUPPORTED" })])
     );
+  });
+
+  // ── Phase 9c — Tenant-aware compilation ────────────────────────────────────
+
+  it("compiles successfully with active tenant and assigned connection", async () => {
+    const compiler = createOracleAwareContractCompiler(createTenantAwareStore());
+
+    const result = await compiler.compile({
+      apiConnectionId: "connection-1",
+      tenantId: "tenant-1",
+      draft: draftContract(),
+      version: 1
+    });
+
+    expect(result.contract).toBeDefined();
+    expect(result.contract?.runtime.tenantId).toBe("tenant-1");
+    expect(result.contract?.runtime.apiConnectionId).toBe("connection-1");
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "CONTRACT_COMPILED" })])
+    );
+  });
+
+  it("fails when tenantId is missing and store enforces tenant validation", async () => {
+    const compiler = createOracleAwareContractCompiler(createTenantAwareStore());
+
+    const result = await compiler.compile({
+      apiConnectionId: "connection-1",
+      // tenantId omitted
+      draft: draftContract()
+    });
+
+    expect(result.contract).toBeUndefined();
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "TENANT_REQUIRED" })])
+    );
+  });
+
+  it("fails when tenant does not exist", async () => {
+    const compiler = createOracleAwareContractCompiler(createTenantAwareStore());
+
+    const result = await compiler.compile({
+      apiConnectionId: "connection-1",
+      tenantId: "no-such-tenant",
+      draft: draftContract()
+    });
+
+    expect(result.contract).toBeUndefined();
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "TENANT_NOT_FOUND" })])
+    );
+  });
+
+  it("fails when tenant is inactive", async () => {
+    const compiler = createOracleAwareContractCompiler(
+      createTenantAwareStore(schemaSnapshot(), { tenantStatus: "suspended" })
+    );
+
+    const result = await compiler.compile({
+      apiConnectionId: "connection-1",
+      tenantId: "tenant-1",
+      draft: draftContract()
+    });
+
+    expect(result.contract).toBeUndefined();
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "TENANT_INACTIVE" })])
+    );
+  });
+
+  it("fails when apiConnectionId is not assigned to tenant", async () => {
+    const compiler = createOracleAwareContractCompiler(
+      createTenantAwareStore(schemaSnapshot(), { connectionAssigned: false })
+    );
+
+    const result = await compiler.compile({
+      apiConnectionId: "connection-1",
+      tenantId: "tenant-1",
+      draft: draftContract()
+    });
+
+    expect(result.contract).toBeUndefined();
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "CONNECTION_NOT_ASSIGNED_TO_TENANT" })])
+    );
+  });
+
+  it("fails when tenant-connection assignment is inactive", async () => {
+    const compiler = createOracleAwareContractCompiler(
+      createTenantAwareStore(schemaSnapshot(), { connectionStatus: "inactive" })
+    );
+
+    const result = await compiler.compile({
+      apiConnectionId: "connection-1",
+      tenantId: "tenant-1",
+      draft: draftContract()
+    });
+
+    expect(result.contract).toBeUndefined();
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "TENANT_CONNECTION_INACTIVE" })])
+    );
+  });
+
+  it("embeds tenantId and apiConnectionId in resolved contract runtime", async () => {
+    const compiler = createOracleAwareContractCompiler(createTenantAwareStore());
+
+    const result = await compiler.compile({
+      apiConnectionId: "connection-1",
+      tenantId: "tenant-1",
+      draft: draftContract(),
+      version: 2
+    });
+
+    expect(result.contract?.runtime).toMatchObject({
+      tenantId: "tenant-1",
+      apiConnectionId: "connection-1",
+      schemaVersion: "1"
+    });
+  });
+
+  it("skips tenant validation when store has no bridgeTenant (dry-run mode)", async () => {
+    // createStore() has no bridgeTenant — tenant validation is not enforced
+    const compiler = createOracleAwareContractCompiler(createStore());
+
+    const result = await compiler.compile({
+      apiConnectionId: "connection-1",
+      // tenantId omitted — allowed in dry-run mode
+      draft: draftContract()
+    });
+
+    expect(result.contract).toBeDefined();
+    expect(result.contract?.runtime.tenantId).toBeUndefined();
   });
 
   it("requires procedure-backed optimistic locking to have mapped version param", async () => {
